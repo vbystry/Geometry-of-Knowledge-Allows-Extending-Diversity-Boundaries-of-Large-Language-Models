@@ -1,0 +1,12 @@
+[submodule "vendor/novelty-bench"]
+	path = vendor/novelty-bench
+	url = https://github.com/novelty-bench/novelty-bench.git
+[submodule "vendor/g2"]
+	path = vendor/g2
+	url = https://github.com/vbystry/emnlp25-g2.git
+[submodule "vendor/llm-discussion"]
+	path = vendor/llm-discussion
+	url = https://github.com/lawraa/LLM-Discussion.git
+[submodule "vendor/xRAG"]
+	path = vendor/xRAG
+	url = https://github.com/Hannibal046/xRAG.git
