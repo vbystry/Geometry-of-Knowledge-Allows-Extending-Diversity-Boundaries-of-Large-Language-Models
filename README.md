@@ -12,6 +12,8 @@ vendor/                       # Git submodules (external dependencies)
   g2/                         #   G2 guided generation (baseline)
   llm-discussion/             #   LLM Discussion multi-agent framework (baseline)
   xRAG/                       #   xRAG multimodal projector
+# Note: vendor code is modified under experiments/ to add Mistral-7B-Instruct-v0.2 support
+# (see experiments/g2/, experiments/llm-discussion/, experiments/src/)
 
 experiments/
   augment_responses.py        # Latent-space augmentation for NoveltyBench
