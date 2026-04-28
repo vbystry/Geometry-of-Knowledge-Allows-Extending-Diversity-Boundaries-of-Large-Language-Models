@@ -22,19 +22,25 @@ SEED=42
 SIGMA=0.05
 STYLE="--use-style-normalization"
 GPU="${CUDA_VISIBLE_DEVICES:-0}"
+MODE="interp"
+MAX_ANCHORS=""
+ANCHOR_NOISE=""
 
 # ── parse arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --input)       INPUT="$2";        shift 2 ;;
-    --output)      OUTPUT="$2";       shift 2 ;;
-    --seed-ratio)  SEED_RATIO="$2";   shift 2 ;;
-    --lambda)      LAMBDA_VALUE="$2"; shift 2 ;;
-    --target-n)    TARGET_N="$2";     shift 2 ;;
-    --seed)        SEED="$2";         shift 2 ;;
-    --sigma)       SIGMA="$2";        shift 2 ;;
-    --no-style)    STYLE="";          shift ;;
-    --gpu)         GPU="$2";          shift 2 ;;
+    --input)         INPUT="$2";         shift 2 ;;
+    --output)        OUTPUT="$2";        shift 2 ;;
+    --seed-ratio)    SEED_RATIO="$2";    shift 2 ;;
+    --lambda)        LAMBDA_VALUE="$2";  shift 2 ;;
+    --target-n)      TARGET_N="$2";      shift 2 ;;
+    --seed)          SEED="$2";          shift 2 ;;
+    --sigma)         SIGMA="$2";         shift 2 ;;
+    --no-style)      STYLE="";           shift ;;
+    --gpu)           GPU="$2";           shift 2 ;;
+    --mode)          MODE="$2";          shift 2 ;;   # ablation: interp|single|mean|medoid|gauss
+    --max-anchors)   MAX_ANCHORS="$2";   shift 2 ;;   # weak-seed: cap anchor count
+    --anchor-noise)  ANCHOR_NOISE="$2";  shift 2 ;;   # weak-seed: noise stddev on anchors
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -53,9 +59,15 @@ if [[ -f .env ]]; then set -a; source .env; set +a; fi
 # ── run ─────────────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$OUTPUT")"
 
-echo "Augmentation: lambda=${LAMBDA_VALUE}  seed-ratio=${SEED_RATIO}  target-n=${TARGET_N}"
+echo "Augmentation: mode=${MODE}  lambda=${LAMBDA_VALUE}  seed-ratio=${SEED_RATIO}  target-n=${TARGET_N}"
 echo "  input:  $INPUT"
 echo "  output: $OUTPUT"
+[[ -n "$MAX_ANCHORS"   ]] && echo "  max-anchors:   $MAX_ANCHORS"
+[[ -n "$ANCHOR_NOISE"  ]] && echo "  anchor-noise:  $ANCHOR_NOISE"
+
+EXTRA_ARGS=()
+[[ -n "$MAX_ANCHORS"  ]] && EXTRA_ARGS+=(--max-anchors "$MAX_ANCHORS")
+[[ -n "$ANCHOR_NOISE" ]] && EXTRA_ARGS+=(--anchor-noise "$ANCHOR_NOISE")
 
 uv run python experiments/augment_responses.py \
     --input "$INPUT" \
@@ -64,7 +76,9 @@ uv run python experiments/augment_responses.py \
     --seed "$SEED" \
     --sigma "$SIGMA" \
     --lambda-value "$LAMBDA_VALUE" \
+    --sampling-mode "$MODE" \
     --target-n "$TARGET_N" \
+    "${EXTRA_ARGS[@]}" \
     $STYLE
 
 echo "Done."

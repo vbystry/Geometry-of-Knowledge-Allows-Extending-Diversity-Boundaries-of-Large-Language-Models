@@ -84,6 +84,10 @@ bash experiments/scripts/run_augmentation.sh \
 | `--seed` | `42` | Random seed |
 | `--no-style` | off | Skip realignment step |
 | `--gpu` | `0` | CUDA visible devices |
+| `--mode` | `interp` | Sampling strategy: `interp` (proposed), `single`, `mean`, `medoid`, `gauss` (ablation) |
+| `--sigma` | `0.05` | Stddev of Gaussian perturbations (used by `--mode gauss`) |
+| `--max-anchors` | (none) | Cap on anchor count — weak-seed ablation (lower coverage) |
+| `--anchor-noise` | `0` | Stddev of Gaussian noise added to anchor embeddings — weak-seed ablation (lower quality) |
 
 **Evaluation** -- partition, score, summarize:
 
@@ -110,6 +114,52 @@ bash experiments/scripts/run_aut.sh \
 ```
 
 **Scoring:** submit the output CSV to [OCSAI](https://openscoring.du.edu/ocsai) (model: `ocsai-4o`, task: English Alternate Uses). Use `experiments/remove_newlines.py` to preprocess CSVs before upload.
+
+### Sampling and weak-seed ablations (NoveltyBench)
+
+These ablations isolate the contribution of the proposed continuous sampling
+strategy. The projector, anchor source, `target_n`, and (per sub-grid)
+realignment are held fixed across cells; only the sampling step changes.
+
+Sub-grids:
+
+- **(A) Sampling strategy, realignment ON.** Compare under matched anchors and
+  matched realignment: single-point conditioning (`single` / `mean` / `medoid`),
+  non-geometric Gaussian perturbations (`gauss`), and the proposed
+  interpolation/extrapolation (`interp`).
+- **(B) Sampling strategy, realignment OFF.** Same grid as (A) but with
+  `--no-style`, so any Distinct/Utility gap is attributable to the sampling
+  step alone (the styler is removed).
+- **(C) Weak-seed robustness.** `interp` only, but the anchor set is degraded
+  via `--max-anchors` (lower coverage) and/or `--anchor-noise` (lower quality)
+  to probe behavior when the seed prior under-covers the solution space.
+
+Run the full grid:
+
+```bash
+bash experiments/scripts/run_ablations.sh \
+    --input  results/curated/g2_theta0.3_temp1_iter15/generations.jsonl \
+    --out-root results/ablations/ \
+    --target-n 15 --seed-ratio 0.3 --lambda 6-10
+```
+
+Results land under `results/ablations/{A_sampling,B_sampling,C_weak_seed}/...`,
+each cell evaluated with `run_evaluation.sh` (pass `--skip-eval` to defer).
+A single cell can also be run directly through `run_augmentation.sh`, e.g.
+
+```bash
+# Single-point baseline (anchor centroid), realignment off
+bash experiments/scripts/run_augmentation.sh \
+    --input  results/curated/g2_theta0.3_temp1_iter15/generations.jsonl \
+    --output results/ablations/manual_mean_nostyle/generations.jsonl \
+    --mode mean --no-style
+
+# Weak-seed: interp with only 2 anchors and mild anchor noise
+bash experiments/scripts/run_augmentation.sh \
+    --input  results/curated/g2_theta0.3_temp1_iter15/generations.jsonl \
+    --output results/ablations/manual_weak_seed/generations.jsonl \
+    --mode interp --max-anchors 2 --anchor-noise 0.10
+```
 
 ### Lambda ablation (Figure 2)
 

@@ -277,31 +277,109 @@ def _interpolate(v1: Sequence[float], v2: Sequence[float], lam: float) -> List[f
     return [lam * a + (1 - lam) * b for a, b in zip(v1, v2)]
 
 
+# Sampling modes for the ablation study (see scripts/run_ablations.sh).
+#   interp  : interpolation/extrapolation between two anchors  -- proposed method
+#   single  : condition on one fixed anchor (the first seed)   -- single-point baseline
+#   mean    : condition on the anchor centroid                  -- single-point baseline
+#   medoid  : condition on the anchor closest to the centroid  -- single-point baseline
+#   gauss   : non-geometric isotropic Gaussian noise around a random anchor
+SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss")
+# Modes that condition on a fixed point: re-encoding outputs back into the seed
+# pool would defeat the baseline, so we hold the conditioning vector constant.
+_FIXED_POINT_MODES = frozenset({"single", "mean", "medoid"})
+
+
+def _parse_lambda_spec(spec: Any) -> Any:
+    """
+    Accept either a fixed float, a "min-max" string, or None.
+
+    Returns:
+        None         -> use the original default range [6, 10] with random sign.
+        float        -> use this fixed lambda.
+        (lo, hi)     -> draw uniformly in [lo, hi] with random sign.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, (int, float)):
+        return float(spec)
+    s = str(spec).strip()
+    if not s:
+        return None
+    if "-" in s[1:]:  # allow leading minus on lo
+        lo, hi = s.split("-", 1) if not s.startswith("-") else ("-" + s[1:].split("-", 1)[0], s[1:].split("-", 1)[1])
+        return (float(lo), float(hi))
+    return float(s)
+
+
+def _sample_lambda(lam_spec: Any) -> float:
+    if lam_spec is None:
+        return random.uniform(6, 10) * random.choice([-1, 1])
+    if isinstance(lam_spec, tuple):
+        lo, hi = lam_spec
+        return random.uniform(lo, hi) * random.choice([-1, 1])
+    return float(lam_spec)
+
+
+def _centroid(seeds: List[List[float]]) -> List[float]:
+    arr = torch.tensor(seeds, dtype=torch.float32)
+    return arr.mean(dim=0).tolist()
+
+
+def _medoid(seeds: List[List[float]]) -> List[float]:
+    arr = torch.tensor(seeds, dtype=torch.float32)
+    centroid = arr.mean(dim=0, keepdim=True)
+    dists = ((arr - centroid) ** 2).sum(dim=1)
+    return seeds[int(torch.argmin(dists).item())]
+
+
 def explore(
     seeds: List[List[float]],
     k: int,
-    sigma: float = 0.05,          # kept for API compatibility; still unused exactly like original
-    lam_value: float | None = None,
+    sigma: float = 0.05,
+    lam_value: Any = None,
+    sampling_mode: str = "interp",
 ) -> List[List[float]]:
     """
-    Simple interpolation among seed embeddings to produce k new latent vectors.
-    (Preserves original behavior exactly.)
+    Sample k latent vectors using one of several strategies (ablation study).
+
+    `sampling_mode == "interp"` reproduces the original paper behavior exactly.
+    All other modes share the projector, prompt, and (optional) realignment so
+    that any change in Distinct/Utility is attributable to the sampling step.
     """
     if not seeds or k <= 0:
         return []
 
-    indices = list(range(len(seeds)))
-    if len(indices) == 1:
-        pairs = [(0, 0)]
-    else:
-        pairs = list(combinations(indices, 2))
+    if sampling_mode not in SAMPLING_MODES:
+        raise ValueError(f"Unknown sampling_mode={sampling_mode!r}; expected one of {SAMPLING_MODES}")
 
-    out: List[List[float]] = []
-    while len(out) < k:
-        i, j = random.choice(pairs)
-        lam = lam_value if lam_value is not None else random.uniform(6, 10) * random.choice([-1, 1])
-        out.append(_interpolate(seeds[i], seeds[j], lam))
-    return out
+    if sampling_mode == "mean":
+        return [list(_centroid(seeds))] * k
+    if sampling_mode == "medoid":
+        return [list(_medoid(seeds))] * k
+    if sampling_mode == "single":
+        return [list(seeds[0])] * k
+
+    indices = list(range(len(seeds)))
+
+    if sampling_mode == "interp":
+        pairs = [(0, 0)] if len(indices) == 1 else list(combinations(indices, 2))
+        out: List[List[float]] = []
+        while len(out) < k:
+            i, j = random.choice(pairs)
+            lam = _sample_lambda(lam_value)
+            out.append(_interpolate(seeds[i], seeds[j], lam))
+        return out
+
+    if sampling_mode == "gauss":
+        out = []
+        while len(out) < k:
+            i = random.choice(indices)
+            base = torch.tensor(seeds[i], dtype=torch.float32)
+            noise = torch.randn_like(base) * float(sigma)
+            out.append((base + noise).tolist())
+        return out
+
+    raise AssertionError("unreachable")  # for completeness
 
 
 # ==============================================
@@ -313,16 +391,28 @@ def expand_record_generations(
     seed_ratio: float = 0.3,
     sigma: float = 0.05,
     use_style_normalization: bool = True,
-    lam_value: float | None = None,
+    lam_value: Any = None,
+    sampling_mode: str = "interp",
+    max_anchors: int | None = None,
+    anchor_noise: float = 0.0,
 ) -> Dict[str, Any]:
     """
-    Preserve original behavior:
+    Preserve original behavior for sampling_mode="interp":
     - If generations empty: use [prompt].
     - n_seed = max(1, int(len(gens_in) * seed_ratio)) (or 1 if empty input).
     - Seeds are the FIRST n_seed generations (not diversity-selected).
     - Generate until total == target_n.
     - Optionally style-normalize, but only if use_style_normalization and first seed is truthy.
     - Re-encode each final_idea and append its embedding to seed_vecs (for subsequent exploration).
+
+    Ablation knobs (do not affect sampling_mode="interp" with default values):
+    - sampling_mode: see SAMPLING_MODES. Fixed-point modes (single/mean/medoid)
+      do NOT append re-encoded outputs to the seed pool, so the conditioning
+      vector stays constant across the target_n - n_seed generations.
+    - max_anchors: cap on |Z_seed| applied AFTER computing seed_vecs (weak-seed
+      ablation: lower-diversity anchor set).
+    - anchor_noise: stddev of Gaussian noise injected into each anchor embedding
+      before exploration (weak-seed ablation: lower-quality anchors).
     """
     prompt = rec["prompt"]
     model = rec.get("model", "unknown-model")
@@ -342,14 +432,31 @@ def expand_record_generations(
         seed_vecs_t = embed_text(seeds_text)  # [S, D]
     seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
 
+    # ── weak-seed ablation: degrade anchor coverage / quality ───────────────
+    if max_anchors is not None and max_anchors > 0:
+        seed_vecs = seed_vecs[:max_anchors]
+        seeds_text = seeds_text[:max_anchors]
+    if anchor_noise and anchor_noise > 0:
+        arr = torch.tensor(seed_vecs, dtype=torch.float32)
+        arr = arr + torch.randn_like(arr) * float(anchor_noise)
+        seed_vecs = arr.tolist()
+
     fmt_example = seeds_text[0]  # gating only (matches original)
     generated: List[str] = []
+
+    update_seed_pool = sampling_mode not in _FIXED_POINT_MODES
 
     gen_num = 0
     while len(seeds_text) + len(generated) < target_n:
         gen_num += 1
 
-        new_vecs = explore(seed_vecs, k=1, sigma=sigma, lam_value=lam_value)
+        new_vecs = explore(
+            seed_vecs,
+            k=1,
+            sigma=sigma,
+            lam_value=lam_value,
+            sampling_mode=sampling_mode,
+        )
         if not new_vecs:
             break
 
@@ -365,11 +472,12 @@ def expand_record_generations(
         final_idea = final_idea.strip()
         generated.append(final_idea)
 
-        # Re-encode styled output and append as new seed embedding (matches original)
-        with torch.no_grad():
-            new_embedding = embed_text([final_idea])  # [1, D]
-            new_embedding_list = new_embedding.detach().to("cpu").tolist()[0]
-            seed_vecs.append(new_embedding_list)
+        if update_seed_pool:
+            # Re-encode styled output and append as new seed embedding (matches original)
+            with torch.no_grad():
+                new_embedding = embed_text([final_idea])  # [1, D]
+                new_embedding_list = new_embedding.detach().to("cpu").tolist()[0]
+                seed_vecs.append(new_embedding_list)
 
     generations_out = (seeds_text + generated)[:target_n]
 
@@ -411,7 +519,10 @@ def process_jsonl(
     seed: int | None = 42,
     sigma: float = 0.05,
     use_style_normalization: bool = True,
-    lam_value: float | None = None,
+    lam_value: Any = None,
+    sampling_mode: str = "interp",
+    max_anchors: int | None = None,
+    anchor_noise: float = 0.0,
 ) -> None:
     """
     Read input JSONL, expand each record, write output JSONL.
@@ -446,6 +557,9 @@ def process_jsonl(
                 sigma=sigma,
                 use_style_normalization=use_style_normalization,
                 lam_value=lam_value,
+                sampling_mode=sampling_mode,
+                max_anchors=max_anchors,
+                anchor_noise=anchor_noise,
             )
 
             fout.write(json.dumps(expanded, ensure_ascii=False) + "\n")
@@ -505,12 +619,38 @@ def main() -> None:
     )
     parser.add_argument(
         "--lambda-value",
-        type=float,
+        type=str,
         default=None,
-        help="Optional fixed lambda for latent interpolation (default: random)",
+        help="Lambda for interpolation: a float (fixed) or 'lo-hi' range (e.g. '6-10'). Default: random in [6,10] with random sign. Only affects sampling-mode=interp.",
+    )
+    parser.add_argument(
+        "--sampling-mode",
+        type=str,
+        default="interp",
+        choices=list(SAMPLING_MODES),
+        help=(
+            "Latent sampling strategy (ablation). "
+            "'interp' = the proposed continuous sampling (default, paper). "
+            "'single'|'mean'|'medoid' = single-point conditioning baselines. "
+            "'gauss' = non-geometric isotropic Gaussian noise around a random anchor "
+            "(stddev controlled by --sigma)."
+        ),
+    )
+    parser.add_argument(
+        "--max-anchors",
+        type=int,
+        default=None,
+        help="Weak-seed ablation: cap number of anchors used for exploration (lower diversity). Default: no cap.",
+    )
+    parser.add_argument(
+        "--anchor-noise",
+        type=float,
+        default=0.0,
+        help="Weak-seed ablation: stddev of Gaussian noise added to anchor embeddings before exploration (lower quality). Default: 0.",
     )
 
     args = parser.parse_args()
+    lam_spec = _parse_lambda_spec(args.lambda_value)
 
     initialize_models()
 
@@ -532,6 +672,11 @@ def main() -> None:
     print(f"  Seed ratio: {args.seed_ratio} (will keep ~{int(target_n * args.seed_ratio)} seeds)")
     print(f"  Random seed: {args.seed}")
     print(f"  Style normalization: {args.use_style_normalization}")
+    print(f"  Sampling mode: {args.sampling_mode}")
+    print(f"  Lambda spec: {lam_spec!r}  (raw: {args.lambda_value!r})")
+    print(f"  Sigma (gauss noise): {args.sigma}")
+    print(f"  Max anchors: {args.max_anchors}")
+    print(f"  Anchor noise stddev: {args.anchor_noise}")
     print()
 
     process_jsonl(
@@ -542,7 +687,10 @@ def main() -> None:
         seed=args.seed,
         sigma=args.sigma,
         use_style_normalization=args.use_style_normalization,
-        lam_value=args.lambda_value,
+        lam_value=lam_spec,
+        sampling_mode=args.sampling_mode,
+        max_anchors=args.max_anchors,
+        anchor_noise=args.anchor_noise,
     )
 
 
