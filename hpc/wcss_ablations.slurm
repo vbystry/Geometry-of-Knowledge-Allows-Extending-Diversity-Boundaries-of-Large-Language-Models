@@ -53,9 +53,8 @@ fi
 source .venv/bin/activate
 echo "[setup] python: $(which python)  $(python --version)"
 
-echo "[setup] pip install -r requirements.txt"
-python -m pip install --quiet --upgrade pip
-python -m pip install --quiet -r requirements.txt
+echo "[setup] uv pip install -r requirements.txt"
+uv pip install --quiet -r requirements.txt
 
 # augment_responses.py imports `xRAG.src.model` directly — make vendor importable.
 export PYTHONPATH="$PWD/vendor:${PYTHONPATH:-}"
