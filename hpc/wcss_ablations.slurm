@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# NoveltyBench ablation grid on WCSS (lem-gpu, 4× H100).
+#
+# Submit from the repo root. Set $WCSS_ACCOUNT to your allocation, e.g.
+#   export WCSS_ACCOUNT=hpc-<group>-<id>
+#
+#   sbatch \
+#     --extra=FORCE_RM_TMPDIR \
+#     --account="$WCSS_ACCOUNT" \
+#     --partition=lem-gpu \
+#     --exclude=r10-12,r16-4 \
+#     --chdir="$PWD" \
+#     --gres=gpu:hopper:4 \
+#     --cpus-per-task=32 \
+#     --mem=512G \
+#     --time=24:00:00 \
+#     --job-name=gok-abl \
+#     --output=logs/gok-abl_%j.out \
+#     --error=logs/gok-abl_%j.err \
+#     hpc/wcss_ablations.slurm
+#
+# Override defaults via env, e.g.:
+#   INPUT=results/curated/g2_theta0.3_temp1_iter15/generations.jsonl \
+#   OUT_ROOT=results/ablations LAMBDA=6-10 sbatch ... hpc/wcss_ablations.slurm
+
+set -euo pipefail
+
+mkdir -p logs
+cd "${SLURM_SUBMIT_DIR:-$PWD}"
+
+# ── env ─────────────────────────────────────────────────────────────────
+# Models are ~14 GB each (xrag-7b + SFR). Cache on lustre, NOT $HOME / /tmp.
+export HF_HOME="${HF_HOME:-$PWD/.hf_cache}"
+export TRANSFORMERS_CACHE="$HF_HOME"
+export HF_HUB_ENABLE_HF_TRANSFER=1
+export TOKENIZERS_PARALLELISM=false
+mkdir -p "$HF_HOME"
+
+# Plain venv (.venv on lustre — $HOME has only 1 GB quota).
+# Pip cache also on lustre to avoid filling $HOME/.cache/pip.
+export PIP_CACHE_DIR="$PWD/.pip_cache"
+mkdir -p "$PIP_CACHE_DIR"
+
+# Optional: module loads (uncomment / adjust if your shell doesn't already see CUDA)
+# module purge
+# module load CUDA/12.4
+
+if [[ ! -d .venv ]]; then
+  echo "[setup] creating .venv"
+  python3 -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+echo "[setup] python: $(which python)  $(python --version)"
+
+echo "[setup] pip install -r requirements.txt"
+python -m pip install --quiet --upgrade pip
+python -m pip install --quiet -r requirements.txt
+
+# augment_responses.py imports `xRAG.src.model` directly — make vendor importable.
+export PYTHONPATH="$PWD/vendor:${PYTHONPATH:-}"
+
+# Helper scripts call `uv run python ...`; shim it to plain `python ...` so the
+# .venv we just activated is what gets used (no uv installed on the cluster).
+uv() {
+  if [[ "${1:-}" == "run" ]]; then
+    shift
+    "$@"
+    return $?
+  fi
+  command uv "$@"
+}
+export -f uv
+
+# ── inputs / config ─────────────────────────────────────────────────────
+INPUT="${INPUT:-results/curated/g2_theta0.3_temp1_iter15/generations.jsonl}"
+OUT_ROOT="${OUT_ROOT:-results/ablations}"
+TARGET_N="${TARGET_N:-15}"
+SEED_RATIO="${SEED_RATIO:-0.3}"
+LAMBDA="${LAMBDA:-6-10}"
+SEED="${SEED:-42}"
+N_GPUS="${N_GPUS:-4}"
+SKIP_EVAL="${SKIP_EVAL:-0}"
+
+if [[ ! -f "$INPUT" ]]; then
+  echo "FATAL: input not found: $INPUT" >&2
+  exit 2
+fi
+
+mkdir -p "$OUT_ROOT" logs
+
+# ── ablation cell list   (subdir | extra args to run_augmentation.sh) ───
+CELLS=(
+  # (A) sampling strategy, realignment ON
+  "A_sampling/style_on/interp|--mode interp"
+  "A_sampling/style_on/single|--mode single"
+  "A_sampling/style_on/mean|--mode mean"
+  "A_sampling/style_on/medoid|--mode medoid"
+  "A_sampling/style_on/gauss|--mode gauss"
+  # (B) sampling strategy, realignment OFF
+  "B_sampling/style_off/interp|--mode interp --no-style"
+  "B_sampling/style_off/single|--mode single --no-style"
+  "B_sampling/style_off/mean|--mode mean --no-style"
+  "B_sampling/style_off/medoid|--mode medoid --no-style"
+  "B_sampling/style_off/gauss|--mode gauss --no-style"
+  # (C) weak-seed robustness (interp only)
+  "C_weak_seed/ma1|--mode interp --max-anchors 1"
+  "C_weak_seed/ma2|--mode interp --max-anchors 2"
+  "C_weak_seed/an010|--mode interp --anchor-noise 0.10"
+  "C_weak_seed/an025|--mode interp --anchor-noise 0.25"
+  "C_weak_seed/ma2_an010|--mode interp --max-anchors 2 --anchor-noise 0.10"
+)
+
+run_cell() {
+  local gpu_id="$1" spec="$2"
+  local subdir="${spec%%|*}" extra="${spec##*|}"
+  local out="$OUT_ROOT/$subdir"
+  local log="logs/cell_${subdir//\//_}_${SLURM_JOB_ID:-local}.log"
+  mkdir -p "$out"
+
+  echo "[$(date +%T)] [GPU $gpu_id] START  $subdir   ($extra)"
+  # shellcheck disable=SC2086
+  bash experiments/scripts/run_augmentation.sh \
+       --input  "$INPUT" \
+       --output "$out/generations.jsonl" \
+       --seed-ratio "$SEED_RATIO" \
+       --lambda     "$LAMBDA" \
+       --target-n   "$TARGET_N" \
+       --seed       "$SEED" \
+       --gpu        "$gpu_id" \
+       $extra \
+       > "$log" 2>&1
+  local rc=$?
+  echo "[$(date +%T)] [GPU $gpu_id] DONE   $subdir   rc=$rc   log=$log"
+  return $rc
+}
+export -f run_cell
+export INPUT OUT_ROOT TARGET_N SEED_RATIO LAMBDA SEED
+
+# ── 4-GPU worker pool via FIFO  ─────────────────────────────────────────
+FIFO=$(mktemp -u "${TMPDIR:-/tmp}/gok_gpu_XXXXXX")
+mkfifo "$FIFO"
+exec 9<>"$FIFO"
+rm "$FIFO"
+for ((g=0; g<N_GPUS; g++)); do echo "$g" >&9; done
+
+failed=0
+for spec in "${CELLS[@]}"; do
+  read -u 9 gpu
+  (
+    if run_cell "$gpu" "$spec"; then :; else
+      echo "FAILED: $spec" >> logs/failed_${SLURM_JOB_ID:-local}.txt
+    fi
+    echo "$gpu" >&9
+  ) &
+done
+wait
+exec 9>&-
+
+if [[ -f logs/failed_${SLURM_JOB_ID:-local}.txt ]]; then
+  echo "Some cells failed:" >&2
+  cat logs/failed_${SLURM_JOB_ID:-local}.txt >&2
+  failed=1
+fi
+
+# ── evaluation (sequential, one GPU is enough) ──────────────────────────
+if [[ "$SKIP_EVAL" -eq 0 ]]; then
+  echo "[$(date +%T)] starting evaluation pass"
+  for spec in "${CELLS[@]}"; do
+    subdir="${spec%%|*}"
+    out="$OUT_ROOT/$subdir"
+    [[ -f "$out/generations.jsonl" ]] || { echo "skip eval (no gens): $out"; continue; }
+    CUDA_VISIBLE_DEVICES=0 bash experiments/scripts/run_evaluation.sh \
+        --eval-dir "$out" \
+        > "logs/eval_${subdir//\//_}_${SLURM_JOB_ID:-local}.log" 2>&1 || \
+      echo "EVAL FAILED: $subdir" >&2
+  done
+fi
+
+echo "[$(date +%T)] all done. results in: $OUT_ROOT"
+exit $failed
