@@ -37,9 +37,11 @@ export TOKENIZERS_PARALLELISM=false
 mkdir -p "$HF_HOME"
 
 # Plain venv (.venv on lustre — $HOME has only 1 GB quota).
-# Pip cache also on lustre to avoid filling $HOME/.cache/pip.
+# uv cache also on lustre — uv ignores PIP_CACHE_DIR and defaults to
+# ~/.cache/uv, which would blow the $HOME quota.
+export UV_CACHE_DIR="$PWD/.uv_cache"
 export PIP_CACHE_DIR="$PWD/.pip_cache"
-mkdir -p "$PIP_CACHE_DIR"
+mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
 
 # Optional: module loads (uncomment / adjust if your shell doesn't already see CUDA)
 # module purge
