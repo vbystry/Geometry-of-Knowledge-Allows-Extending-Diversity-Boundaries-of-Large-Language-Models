@@ -119,16 +119,99 @@ def _noise_table(embs, sigmas, seed=0):
         print(f"{sigma:>5.2f}  {nn.mean().item():>7.3f}   {ratio:>9.3f}   {cos:>+7.4f}")
 
 
+def _distance_stats(name, sets):
+    """Per-prompt anchor geometry: L2 within set, radius, L2 between sets.
+
+    sets: list of (n_i, d) tensors, one per prompt.
+    """
+    print(f"--- {name}: per-prompt anchor geometry ---")
+    within_l2 = []
+    within_cos = []
+    radii = []
+    centroids = []
+    for s in sets:
+        if s.shape[0] >= 2:
+            # all pairs (i<j) within this set
+            diffs = s.unsqueeze(0) - s.unsqueeze(1)
+            d = diffs.norm(dim=-1)
+            mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+            within_l2.append(d[mask])
+            cos = torch.nn.functional.cosine_similarity(
+                s.unsqueeze(0), s.unsqueeze(1), dim=-1
+            )
+            within_cos.append(cos[mask])
+        c = s.mean(dim=0)
+        centroids.append(c)
+        radii.append((s - c).norm(dim=-1))
+    if within_l2:
+        wl = torch.cat(within_l2)
+        wc = torch.cat(within_cos)
+        print(f"  within-set ||a_i - a_j||_2: mean={wl.mean().item():.2f}"
+              f"  median={wl.median().item():.2f}"
+              f"  std={wl.std().item():.2f}"
+              f"  min={wl.min().item():.2f}"
+              f"  max={wl.max().item():.2f}")
+        print(f"  within-set cos(a_i, a_j):    mean={wc.mean().item():.3f}"
+              f"  min={wc.min().item():.3f}"
+              f"  max={wc.max().item():.3f}")
+    rad = torch.cat(radii)
+    print(f"  cluster radius ||a - centroid||: mean={rad.mean().item():.2f}"
+          f"  median={rad.median().item():.2f}"
+          f"  max={rad.max().item():.2f}")
+    if len(centroids) >= 2:
+        C = torch.stack(centroids)
+        diffs = C.unsqueeze(0) - C.unsqueeze(1)
+        d = diffs.norm(dim=-1)
+        mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+        bl = d[mask]
+        print(f"  between-prompt ||centroid_i - centroid_j||: mean={bl.mean().item():.2f}"
+              f"  median={bl.median().item():.2f}"
+              f"  min={bl.min().item():.2f}"
+              f"  max={bl.max().item():.2f}")
+
+
+def _calibrated_sigmas_table(sets, sigmas, seed=0):
+    """Show how each sigma compares to the natural anchor scale."""
+    g = torch.Generator().manual_seed(seed)
+    # collect within-set L2 and radius across all sets
+    within_l2 = []
+    radii = []
+    for s in sets:
+        if s.shape[0] >= 2:
+            diffs = s.unsqueeze(0) - s.unsqueeze(1)
+            d = diffs.norm(dim=-1)
+            mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+            within_l2.append(d[mask])
+        c = s.mean(dim=0)
+        radii.append((s - c).norm(dim=-1))
+    if not within_l2:
+        return
+    wl_mean = torch.cat(within_l2).mean().item()
+    rad_mean = torch.cat(radii).mean().item()
+    flat = torch.cat([s for s in sets if s.shape[0] >= 1])
+    print(f"  reference: anchor-anchor L2 mean = {wl_mean:.2f}"
+          f",  cluster radius mean = {rad_mean:.2f}")
+    print()
+    print("sigma   |eta|     |eta|/anchor-anchor   |eta|/radius   cos(e, e+eta)")
+    norms = flat.norm(dim=-1)
+    for sigma in sigmas:
+        eta = torch.randn(flat.shape, generator=g) * float(sigma)
+        nn = eta.norm(dim=-1)
+        perturbed = flat + eta
+        cos = torch.nn.functional.cosine_similarity(flat, perturbed, dim=-1).mean().item()
+        print(f"{sigma:>5.2f}  {nn.mean().item():>7.2f}   "
+              f"{nn.mean().item()/wl_mean:>18.3f}   "
+              f"{nn.mean().item()/rad_mean:>10.3f}   "
+              f"{cos:>+7.4f}")
+
+
 def _load_real_anchors(path: Path, num_prompts: int, seed_ratio: float, max_anchors: int | None):
     """Replicate the anchor selection from augment_responses.py:select_seeds.
 
-    Each line of generations.jsonl has fields including 'prompt' and a list of
-    candidate generations under 'generations' (or 'responses'/'outputs'); the
-    augmentation pipeline keeps the top floor(seed_ratio * len) generations as
-    seeds. For the embedding-scale probe we only need the seed *texts* — the
-    pipeline embeds them with SFR and treats the result as the anchor set.
+    Returns a list of per-prompt seed lists so we can compute within- vs
+    between-prompt distances downstream.
     """
-    seed_texts = []
+    per_prompt = []
     candidate_keys = ("generations", "responses", "outputs", "completions")
     with path.open() as f:
         for i, line in enumerate(f):
@@ -141,13 +224,11 @@ def _load_real_anchors(path: Path, num_prompts: int, seed_ratio: float, max_anch
                     cand = rec[k]
                     break
             if cand is None:
-                # fall back: maybe the record is just {prompt, response}
                 if "response" in rec:
                     cand = [rec["response"]]
                 else:
                     continue
             if isinstance(cand, list) and cand and isinstance(cand[0], dict):
-                # records of the form [{"text": "...", ...}, ...]
                 cand = [c.get("text") or c.get("response") or c.get("output") for c in cand]
             cand = [c for c in cand if isinstance(c, str) and c.strip()]
             if not cand:
@@ -156,8 +237,8 @@ def _load_real_anchors(path: Path, num_prompts: int, seed_ratio: float, max_anch
             seeds = cand[:n_seed]
             if max_anchors is not None and len(seeds) > max_anchors:
                 seeds = seeds[:max_anchors]
-            seed_texts.extend(seeds)
-    return seed_texts
+            per_prompt.append(seeds)
+    return per_prompt
 
 
 def main():
@@ -199,16 +280,26 @@ def main():
         print("=" * 64)
         print(f"(b) Real-anchor probe — {args.input}")
         print("=" * 64)
-        seeds = _load_real_anchors(
+        per_prompt_texts = _load_real_anchors(
             args.input, args.num_prompts, args.seed_ratio, args.max_anchors
         )
-        print(f"Loaded {len(seeds)} seed strings from {args.num_prompts} prompts.")
-        if not seeds:
+        n_total = sum(len(s) for s in per_prompt_texts)
+        print(f"Loaded {n_total} seed strings across {len(per_prompt_texts)} prompts.")
+        if not per_prompt_texts:
             print("No seeds extracted; aborting probe (b).")
             return
-        real = _embed_texts(ret, tok, seeds)
-        _summarise("real anchors", real)
+        # embed per-prompt to keep the per-prompt anchor structure
+        per_prompt_embs = []
+        for seeds in per_prompt_texts:
+            per_prompt_embs.append(_embed_texts(ret, tok, seeds))
+        real = torch.cat(per_prompt_embs, dim=0)
+        _summarise("real anchors (flattened)", real)
         print()
+        _distance_stats("real anchors", per_prompt_embs)
+        print()
+        _calibrated_sigmas_table(per_prompt_embs, args.sigmas, seed=args.seed)
+        print()
+        print("--- noise table on flattened anchors (legacy view) ---")
         _noise_table(real, args.sigmas, seed=args.seed)
 
 
