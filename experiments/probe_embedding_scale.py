@@ -61,13 +61,27 @@ TOY_TEXTS = [
 ]
 
 
-def _embed_texts(retriever, tokenizer, texts):
+def _embed_texts(retriever, tokenizer, texts, batch_size: int = 4):
+    """Mirrors the tokenize+embed call in experiments/augment_responses.py."""
+    device = next(retriever.parameters()).device
     embs = []
     with torch.no_grad():
-        for t in texts:
-            e = get_retrieval_embeds(retriever, tokenizer, [t]).float()
-            embs.append(e[0].cpu())
-    return torch.stack(embs)
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            toks = tokenizer(
+                batch,
+                max_length=256,
+                padding=True,
+                truncation=True,
+                return_tensors="pt",
+            )
+            e = get_retrieval_embeds(
+                retriever,
+                input_ids=toks["input_ids"].to(device),
+                attention_mask=toks["attention_mask"].to(device),
+            ).float()
+            embs.append(e.cpu())
+    return torch.cat(embs, dim=0)
 
 
 def _summarise(name, embs):
