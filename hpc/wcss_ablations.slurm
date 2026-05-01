@@ -124,6 +124,20 @@ CELLS=(
   "C_weak_seed/an010|--mode interp --anchor-noise 0.10"
   "C_weak_seed/an025|--mode interp --anchor-noise 0.25"
   "C_weak_seed/ma2_an010|--mode interp --max-anchors 2 --anchor-noise 0.10"
+  # (D) calibrated noise levels: sigma chosen relative to the empirical
+  # anchor scale (see experiments/probe_embedding_scale.py).
+  # NoveltyBench / SFR-Embedding-Mistral reference: anchor-anchor L2 ~176,
+  # cluster radius ~108, per-coord std ~4.77.
+  # gauss sigma in {1,2}: perturbation ~36% / ~73% of anchor-anchor L2.
+  "D_calibrated/gauss_s1|--mode gauss --sigma 1.0"
+  "D_calibrated/gauss_s2|--mode gauss --sigma 2.0"
+  # anchor-noise in {1,2,5}: cos(orig, perturbed) drops to 0.98/0.92/0.69.
+  "D_calibrated/an_s1|--mode interp --anchor-noise 1.0"
+  "D_calibrated/an_s2|--mode interp --anchor-noise 2.0"
+  "D_calibrated/an_s5|--mode interp --anchor-noise 5.0"
+  # random conditioning: ignore anchors entirely; sigma=4.77 = per-coord std
+  # so ||z|| matches the natural anchor norm (~305).
+  "D_calibrated/random|--mode random --sigma 4.77"
 )
 
 run_cell() {
