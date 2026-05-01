@@ -283,7 +283,10 @@ def _interpolate(v1: Sequence[float], v2: Sequence[float], lam: float) -> List[f
 #   mean    : condition on the anchor centroid                  -- single-point baseline
 #   medoid  : condition on the anchor closest to the centroid  -- single-point baseline
 #   gauss   : non-geometric isotropic Gaussian noise around a random anchor
-SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss")
+#   random  : ignore anchors entirely; draw z ~ N(0, sigma^2 I) per dim
+#             (set --sigma to the empirical per-coord std of the embedding
+#             distribution to match natural scale)
+SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss", "random")
 # Modes that condition on a fixed point: re-encoding outputs back into the seed
 # pool would defeat the baseline, so we hold the conditioning vector constant.
 _FIXED_POINT_MODES = frozenset({"single", "mean", "medoid"})
@@ -377,6 +380,18 @@ def explore(
             base = torch.tensor(seeds[i], dtype=torch.float32)
             noise = torch.randn_like(base) * float(sigma)
             out.append((base + noise).tolist())
+        return out
+
+    if sampling_mode == "random":
+        # Draw z ~ N(0, sigma^2 I) per dim, ignoring anchors entirely.
+        # Calibrate sigma to the empirical per-coord std of the embedding
+        # distribution (e.g. ~4.77 for SFR-Embedding-Mistral on NoveltyBench)
+        # so that ||z|| matches the natural anchor scale.
+        d = len(seeds[0])
+        out = []
+        for _ in range(k):
+            z = torch.randn(d) * float(sigma)
+            out.append(z.tolist())
         return out
 
     raise AssertionError("unreachable")  # for completeness
@@ -633,7 +648,10 @@ def main() -> None:
             "'interp' = the proposed continuous sampling (default, paper). "
             "'single'|'mean'|'medoid' = single-point conditioning baselines. "
             "'gauss' = non-geometric isotropic Gaussian noise around a random anchor "
-            "(stddev controlled by --sigma)."
+            "(stddev controlled by --sigma). "
+            "'random' = ignore anchors; draw z ~ N(0, sigma^2 I) per dim, with "
+            "--sigma set to the empirical per-coord std of the embedding "
+            "distribution to match natural scale."
         ),
     )
     parser.add_argument(
