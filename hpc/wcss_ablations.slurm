@@ -57,6 +57,9 @@ echo "[setup] python: $(which python)  $(python --version)"
 
 echo "[setup] uv pip install -r requirements.txt"
 uv pip install --quiet -r requirements.txt
+# requirements.txt doesn't list hf_transfer, but HF_HUB_ENABLE_HF_TRANSFER=1
+# above requires it.
+uv pip install --quiet hf_transfer
 
 # augment_responses.py imports `xRAG.src.model` directly — make vendor importable.
 export PYTHONPATH="$PWD/vendor:${PYTHONPATH:-}"
