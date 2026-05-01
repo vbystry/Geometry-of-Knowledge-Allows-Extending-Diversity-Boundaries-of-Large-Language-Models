@@ -33,7 +33,9 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 export HF_HOME="${HF_HOME:-$PWD/.hf_cache}"
 export TRANSFORMERS_CACHE="$HF_HOME"
 export HF_HUB_CACHE="$HF_HOME/hub"
-export HF_DATASETS_CACHE="$HF_HOME/datasets"
+# Datasets cache lives on TMPDIR (local node scratch) so its disk-space
+# self-check doesn't trip on the near-quota lustre PD.
+export HF_DATASETS_CACHE="${TMPDIR:-$HF_HOME}/hf-datasets"
 export HF_HUB_ENABLE_HF_TRANSFER=1
 export TOKENIZERS_PARALLELISM=false
 # Other tools also default to ~/.cache, which would blow $HOME quota.
