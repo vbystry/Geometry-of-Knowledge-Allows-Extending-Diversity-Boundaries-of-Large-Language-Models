@@ -32,9 +32,17 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 # Models are ~14 GB each (xrag-7b + SFR). Cache on lustre, NOT $HOME / /tmp.
 export HF_HOME="${HF_HOME:-$PWD/.hf_cache}"
 export TRANSFORMERS_CACHE="$HF_HOME"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
 export HF_HUB_ENABLE_HF_TRANSFER=1
 export TOKENIZERS_PARALLELISM=false
-mkdir -p "$HF_HOME"
+# Other tools also default to ~/.cache, which would blow $HOME quota.
+export XDG_CACHE_HOME="$PWD/.cache"
+export VLLM_CACHE_ROOT="$XDG_CACHE_HOME/vllm"
+export TORCH_HOME="$XDG_CACHE_HOME/torch"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
+mkdir -p "$HF_HOME" "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" \
+         "$VLLM_CACHE_ROOT" "$TORCH_HOME" "$TRITON_CACHE_DIR"
 
 # Plain venv (.venv on lustre — $HOME has only 1 GB quota).
 # uv cache also on lustre — uv ignores PIP_CACHE_DIR and defaults to
