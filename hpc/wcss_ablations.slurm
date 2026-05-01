@@ -62,7 +62,8 @@ uv pip install --quiet -r requirements.txt
 uv pip install --quiet hf_transfer
 
 # augment_responses.py imports `xRAG.src.model` directly — make vendor importable.
-export PYTHONPATH="$PWD/vendor:${PYTHONPATH:-}"
+# experiments/src/*.py uses `from src.common ...` — needs experiments/ on path.
+export PYTHONPATH="$PWD/vendor:$PWD/experiments:${PYTHONPATH:-}"
 
 # Helper scripts call `uv run python ...`; shim it to plain `python ...` so the
 # .venv we just activated is what gets used (no uv installed on the cluster).
@@ -121,6 +122,11 @@ run_cell() {
   local out="$OUT_ROOT/$subdir"
   local log="logs/cell_${subdir//\//_}_${SLURM_JOB_ID:-local}.log"
   mkdir -p "$out"
+
+  if [[ -s "$out/generations.jsonl" ]]; then
+    echo "[$(date +%T)] [GPU $gpu_id] SKIP   $subdir   (output exists)"
+    return 0
+  fi
 
   echo "[$(date +%T)] [GPU $gpu_id] START  $subdir   ($extra)"
   # shellcheck disable=SC2086
