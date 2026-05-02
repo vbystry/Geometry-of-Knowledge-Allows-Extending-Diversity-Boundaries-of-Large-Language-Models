@@ -267,6 +267,32 @@ def main():
         ids = reward_tok.apply_chat_template(chat, tokenize=True, return_tensors="pt").to(reward.device)
         return reward(ids).logits[0, 0].item()
 
+    # G2 baseline reference: score the original G2 outputs from the input
+    # file on the same prompts. Provides an upper-bound reference for
+    # what we'd get if we just used G2 directly without any latent step.
+    print()
+    print("=" * 80)
+    print("G2 BASELINE REFERENCE (raw G2 outputs from input, same prompts)")
+    print("=" * 80)
+    g2_input = "results/curated/g2_theta0.3_temp1_iter15/generations.jsonl"
+    g2_scores: dict[str, list[float]] = {}
+    target_ids = {pid for pid, _, _ in GRID}
+    with open(g2_input) as f:
+        for line in f:
+            r = json.loads(line)
+            if r["id"] in target_ids:
+                gens = r["generations"]
+                ss = []
+                for gi, g in enumerate(gens):
+                    s = score(r["prompt"], g)
+                    ss.append(s)
+                g2_scores[r["id"]] = ss
+                print(f"\n=== {r['id']}: {r['prompt']}")
+                for gi, (g, s) in enumerate(zip(gens, ss)):
+                    short = g[:120].strip().replace("\n", " ")
+                    if len(g) > 120: short += "..."
+                    print(f"  [G2-{gi+1:>2}] u={s:>+6.3f}  ({len(g)} chars)  {short}")
+
     # Run grid
     print()
     print("=" * 80)
@@ -295,15 +321,29 @@ def main():
     # Summary table
     print()
     print("=" * 80)
-    print("SUMMARY (mean Skywork reward across all 9 (prompt, draft) pairs)")
+    print("SUMMARY (mean Skywork reward across all (prompt, draft) pairs)")
     print("=" * 80)
     print(f"{'variant':<28} {'n':>3} {'mean_u':>8} {'min_u':>8} {'max_u':>8}")
-    for vname, scores in summary.items():
-        if not scores:
+    # G2 baseline first
+    all_g2 = [s for ss in g2_scores.values() for s in ss]
+    if all_g2:
+        n = len(all_g2)
+        m = sum(all_g2) / n
+        print(f"{'G2_baseline':<28} {n:>3} {m:>+8.3f} {min(all_g2):>+8.3f} {max(all_g2):>+8.3f}")
+        # Mean across just first 4 (the G2 anchors used as seeds)
+        first4 = []
+        for ss in g2_scores.values():
+            first4.extend(ss[:4])
+        n4 = len(first4)
+        m4 = sum(first4) / n4
+        print(f"{'G2_first4_anchors':<28} {n4:>3} {m4:>+8.3f} {min(first4):>+8.3f} {max(first4):>+8.3f}")
+        print(f"{'-'*60}")
+    for vname, scores_v in summary.items():
+        if not scores_v:
             continue
-        n = len(scores)
-        m = sum(scores) / n
-        print(f"{vname:<28} {n:>3} {m:>+8.3f} {min(scores):>+8.3f} {max(scores):>+8.3f}")
+        n = len(scores_v)
+        m = sum(scores_v) / n
+        print(f"{vname:<28} {n:>3} {m:>+8.3f} {min(scores_v):>+8.3f} {max(scores_v):>+8.3f}")
 
     # Persist full log next to the python file for later inspection.
     out_path = "logs/refinement_probe.jsonl"
