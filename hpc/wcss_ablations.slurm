@@ -172,6 +172,14 @@ CELLS=(
   "E_bypass/bypass_nat|--mode bypass_random --sigma 0.0027"
   "E_bypass/bypass_mid|--mode bypass_random --sigma 1.0"
   "E_bypass/bypass_proj|--mode bypass_random --sigma 200.0"
+  # (F) verbose realignment: same methods as before but the realignment
+  # prompt has been rewritten to produce detailed, AI-assistant-style
+  # replies (matching the verbose style that Skywork-Reward-Gemma-2-27B
+  # consistently rewards). Tests whether the apparent utility gap between
+  # G2 and our latent generations is driven by the reward model's
+  # verbosity preference rather than answer quality.
+  "F_verbose/random|--mode random --sigma 4.77"
+  "F_verbose/interp|--mode interp"
 )
 
 run_cell() {

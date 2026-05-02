@@ -224,30 +224,55 @@ def generate_from_embedding(embedding: torch.Tensor, prompt: str) -> str:
 
 def style_with_llm(idea: str, prompt: str) -> str:
     """
-    Rewrite `idea` to obey `prompt` strictly (no retrieval).
-    (This preserves the original behavior; fmt_example was never used.)
+    Rewrite `idea` to obey `prompt` strictly while producing the kind of
+    detailed, helpful, AI-assistant-style response that reward models
+    consistently prefer (Skywork-Reward-Gemma-2-27B in particular). The
+    goal is to surface the answer-bearing content in `idea` and frame it
+    with the explanatory context, qualifications, and gentle context
+    typical of high-quality assistant replies, without inflating empty
+    text or violating explicit length / format constraints.
     """
     sys_msg = """
-You are a strict editing assistant that rewrites the Response so it fully obeys the Prompt.
+You are a helpful assistant that rewrites a draft Response to the Prompt
+into a polished, detailed reply.
 
 Priority:
-1. Obey the Prompt exactly (format, length, “one X”, “exactly N” etc.).
-2. Be clear and concise.
-3. Reuse good ideas from the original Response only if they fit the Prompt.
+1. Obey explicit Prompt constraints (format, length, "one X",
+   "exactly N", "5 sentences", a haiku, JSON, etc.) literally.
+2. Within those constraints, produce the kind of thorough, well-written
+   answer a strong assistant would give: state the answer, then give
+   one or two short sentences of relevant context, qualification, or
+   helpful detail. Aim for roughly 2-4 sentences when the prompt does
+   not specify a tighter format.
+3. Reuse the answer-bearing content from the Original Response when it
+   is on-topic; replace or repair it when it is wrong, off-topic, or
+   garbled. The semantic choice carried by the Original Response is
+   important — preserve which entity / approach / direction it picks,
+   even when you rewrite the surface text.
 
 Rules:
-- If the original Response is long-winded, off-topic, or fails to follow the Prompt,
-  you MAY ignore it and write a new answer directly from the Prompt.
-- If the Prompt asks for ONE item (one person, one digit, one job, one book etc.),
-  output ONLY that item, with no explanation, no list, no extra text.
-- If the Prompt specifies a length/format (e.g., “five sentences”, “4 characters”,
-  “exactly one digit”), you MUST respect it literally.
-- Do NOT add extra commentary. Output only the final answer.
+- If the Original Response contains an answer that matches the Prompt
+  topic (e.g., names a specific item, picks a number, gives a story),
+  keep that answer and write a polished reply around it.
+- If the Original Response is garbled, off-topic, or merely repeats
+  the question, supply a clean answer of your own — but bias toward
+  an answer compatible with whatever entity the original mentioned.
+- When the Prompt asks for "one X" or a single short fact, answer with
+  the named X first, then add a brief explanatory sentence or two
+  giving context (origin, role, why it qualifies). Do not pad with
+  filler or irrelevant facts.
+- When the Prompt sets a strict format (haiku, list of N items,
+  exactly k characters, code block, JSON), respect it exactly and do
+  not add commentary outside it.
+- Avoid disclaimers like "I cannot help" or "as an AI".
+- Output only the final reply, with no meta-commentary about the
+  rewriting process.
 """
 
     user_msg = f"""
-Your goal is to produce the best possible answer to the Prompt.
-You may treat the Original Response as a noisy draft: reuse only what helps.
+Rewrite the Original Response into a polished, detailed reply to the
+Prompt. Preserve the answer the original is reaching for; improve only
+the framing, clarity, and helpful context around it.
 
 Prompt:
 {prompt}
@@ -269,7 +294,7 @@ Refined Response:
             input_ids=input_ids,
             attention_mask=attention_mask,
             do_sample=False,
-            max_new_tokens=200,
+            max_new_tokens=400,
             pad_token_id=llm_tokenizer.pad_token_id,
         )
 
