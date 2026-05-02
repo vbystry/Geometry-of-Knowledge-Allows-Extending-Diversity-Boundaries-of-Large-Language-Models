@@ -143,6 +143,9 @@ CELLS=(
   "D_calibrated/an_s100|--mode interp --anchor-noise 100.0"
   "D_calibrated/an_s200|--mode interp --anchor-noise 200.0"
   "D_calibrated/an_s500|--mode interp --anchor-noise 500.0"
+  "D_calibrated/an_s1k|--mode interp --anchor-noise 1000.0"
+  "D_calibrated/an_s2k|--mode interp --anchor-noise 2000.0"
+  "D_calibrated/an_s10k|--mode interp --anchor-noise 10000.0"
   # random conditioning: ignore anchors entirely; sigma=4.77 = per-coord std
   # so ||z|| matches the natural anchor norm (~305).
   "D_calibrated/random|--mode random --sigma 4.77"
@@ -154,6 +157,9 @@ CELLS=(
   "D_calibrated/random_s100|--mode random --sigma 100.0"
   "D_calibrated/random_s200|--mode random --sigma 200.0"
   "D_calibrated/random_s500|--mode random --sigma 500.0"
+  "D_calibrated/random_s1k|--mode random --sigma 1000.0"
+  "D_calibrated/random_s2k|--mode random --sigma 2000.0"
+  "D_calibrated/random_s10k|--mode random --sigma 10000.0"
   # (E) bypass_random: feed z directly into the LLM input-embedding sequence
   # at the xRAG token position, skipping the projector. Three sigma scales
   # (probe values from probe_projector_distribution.py):
