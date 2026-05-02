@@ -131,13 +131,22 @@ CELLS=(
   # gauss sigma in {1,2}: perturbation ~36% / ~73% of anchor-anchor L2.
   "D_calibrated/gauss_s1|--mode gauss --sigma 1.0"
   "D_calibrated/gauss_s2|--mode gauss --sigma 2.0"
-  # anchor-noise in {1,2,5}: cos(orig, perturbed) drops to 0.98/0.92/0.69.
+  # anchor-noise in {1,2,5,20,50}: cos(orig, perturbed) drops to
+  # 0.98/0.92/0.69/~0.18/~0.07 -- s20/s50 effectively turn anchors into
+  # random vectors of larger-than-natural norm.
   "D_calibrated/an_s1|--mode interp --anchor-noise 1.0"
   "D_calibrated/an_s2|--mode interp --anchor-noise 2.0"
   "D_calibrated/an_s5|--mode interp --anchor-noise 5.0"
+  "D_calibrated/an_s20|--mode interp --anchor-noise 20.0"
+  "D_calibrated/an_s50|--mode interp --anchor-noise 50.0"
   # random conditioning: ignore anchors entirely; sigma=4.77 = per-coord std
   # so ||z|| matches the natural anchor norm (~305).
   "D_calibrated/random|--mode random --sigma 4.77"
+  # random at larger-than-natural scale: same comparison axis as the s20/s50
+  # anchor-noise rows, so we can see whether the gain depends on the
+  # natural-scale prior or just on a stochastic latent.
+  "D_calibrated/random_s20|--mode random --sigma 20.0"
+  "D_calibrated/random_s50|--mode random --sigma 50.0"
 )
 
 run_cell() {
