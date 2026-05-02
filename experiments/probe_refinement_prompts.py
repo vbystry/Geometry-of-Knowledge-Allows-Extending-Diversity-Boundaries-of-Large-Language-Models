@@ -59,6 +59,15 @@ GRID: List[Tuple[str, str, List[str]]] = [
             "\"Excuse me, may I write my own saying?\" This is a common saying that English teachers may dislike, but it is not a saying that is widely known.",
         ],
     ),
+    (
+        "curated-4",
+        "Write a short love poem with 4 lines.",
+        [
+            "Whispers of the night,\nIn quietude we meet,\nOur hearts in rhythmic flight,\nIn love's sweet silence, complete.",
+            "In the heart of the city,\nWhere love's sweet song is heard,\nIn the silence of the night,\nWe meet, and our love is stirred.",
+            "Time's gentle hand, in love's embrace,\nEmbraces hearts, in tender grace.\nIn moments shared, a timeless space,\nTwo souls entwined, in love's embrace.",
+        ],
+    ),
 ]
 
 
@@ -144,6 +153,27 @@ Constraints:
 Output only the final reply."""
 
 
+V_HYBRID = """\
+You produce a confident, well-articulated reply to the Prompt, using the Original Response only as a hint about which entity / answer / direction to commit to.
+
+Style:
+- Confident, clear, complete; an attentive reader should not need to re-ask.
+- Default to a single sentence containing the answer plus brief safe context.
+- For multi-sentence prompts (story of N sentences, list of N items, haiku, poem with N lines, JSON), match the requested format EXACTLY and do not add commentary outside it.
+
+Factual safety (critical):
+- NEVER add specific facts (dates, places, awards, ranks, statistics, years, biographies) that are not already in the Original Response.
+- If the Original Response contains a wrong fact, OMIT it rather than repeat it.
+- If the Original Response is empty, off-topic, or merely refuses, supply a clean short answer of your own without invented details.
+
+Forbidden:
+- "As an AI ...", "I cannot ...", meta-commentary about the rewriting.
+- References to <xRAG>, the Original Response, or the rewriting process.
+- Padding with filler (e.g. "This is interesting because ..." without substantive content).
+
+Output only the final reply."""
+
+
 VARIANTS: List[Tuple[str, str]] = [
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v1_verbose_failed",     V_VERBOSE_FAILED),
@@ -151,6 +181,7 @@ VARIANTS: List[Tuple[str, str]] = [
     ("v3_g2_style",           V_G2_STYLE),
     ("v4_defensive_short",    V_DEFENSIVE_SHORT),
     ("v5_preserve_rewrite",   V_PRESERVE_REWRITE),
+    ("v6_hybrid",             V_HYBRID),
 ]
 
 
