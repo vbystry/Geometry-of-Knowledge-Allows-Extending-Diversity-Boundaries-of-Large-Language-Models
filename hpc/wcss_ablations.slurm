@@ -180,6 +180,12 @@ CELLS=(
   # verbosity preference rather than answer quality.
   "F_verbose/random|--mode random --sigma 4.77"
   "F_verbose/interp|--mode interp"
+  # (G) v3 G2-style refinement (now installed as the default in
+  # style_with_llm). Re-runs random + interp with the new prompt to see
+  # whether the +0.55 raw-reward edge from the probe translates into
+  # full-benchmark utility.
+  "G_v3/random|--mode random --sigma 4.77"
+  "G_v3/interp|--mode interp"
 )
 
 run_cell() {
@@ -246,6 +252,10 @@ if [[ "$SKIP_EVAL" -eq 0 ]]; then
     subdir="${spec%%|*}"
     out="$OUT_ROOT/$subdir"
     [[ -f "$out/generations.jsonl" ]] || { echo "skip eval (no gens): $out"; continue; }
+    if [[ -s "$out/summary.json" && "${FORCE_EVAL:-0}" != "1" ]]; then
+      echo "skip eval (summary exists): $out"
+      continue
+    fi
     CUDA_VISIBLE_DEVICES=0 bash experiments/scripts/run_evaluation.sh \
         --eval-dir "$out" \
         > "logs/eval_${subdir//\//_}_${SLURM_JOB_ID:-local}.log" 2>&1 || \
