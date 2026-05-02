@@ -154,6 +154,18 @@ CELLS=(
   "D_calibrated/random_s100|--mode random --sigma 100.0"
   "D_calibrated/random_s200|--mode random --sigma 200.0"
   "D_calibrated/random_s500|--mode random --sigma 500.0"
+  # (E) bypass_random: feed z directly into the LLM input-embedding sequence
+  # at the xRAG token position, skipping the projector. Three sigma scales
+  # (probe values from probe_projector_distribution.py):
+  #   - 0.0027: matches the per-coord std of model.embed_tokens.weight
+  #             (i.e. ||z|| ~ 0.17 == natural Mistral token-embedding norm).
+  #   - 1.0   : intermediate (||z|| ~ 64).
+  #   - 200   : matches the projector-image per-coord std (||z|| ~ 12.8k,
+  #             i.e. what the LLM is fine-tuned to receive when the projector
+  #             is in use).
+  "E_bypass/bypass_nat|--mode bypass_random --sigma 0.0027"
+  "E_bypass/bypass_mid|--mode bypass_random --sigma 1.0"
+  "E_bypass/bypass_proj|--mode bypass_random --sigma 200.0"
 )
 
 run_cell() {

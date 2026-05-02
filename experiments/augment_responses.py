@@ -89,7 +89,12 @@ def initialize_models() -> None:
     # XRAG placeholder token id
     llm.set_xrag_token_id(llm_tokenizer.convert_tokens_to_ids(XRAG_TOKEN))
 
-    # Monkey-patch prepare_inputs_embeds to ensure device alignment (unchanged)
+    # Monkey-patch prepare_inputs_embeds to ensure device alignment (unchanged
+    # except for the bypass-projector escape hatch, used by sampling_mode
+    # 'bypass_random' to feed the latent directly into the LLM input-embedding
+    # space without the xRAG projector).
+    llm._bypass_projector = False
+
     def patched_prepare_inputs_embeds(input_ids, retrieval_embeds):
         inputs_embeds = llm.model.embed_tokens(input_ids)
         retrieval_embeds = retrieval_embeds.view(-1, llm.retriever_hidden_size)
@@ -98,7 +103,9 @@ def initialize_models() -> None:
         num_retrieval_embeds = retrieval_embeds.shape[0]
         assert num_xrag_tokens == num_retrieval_embeds, (num_xrag_tokens, num_retrieval_embeds)
 
-        retrieval_embeds = llm.projector(retrieval_embeds.to(inputs_embeds.dtype))
+        retrieval_embeds = retrieval_embeds.to(inputs_embeds.dtype)
+        if not llm._bypass_projector:
+            retrieval_embeds = llm.projector(retrieval_embeds)
         retrieval_embeds = retrieval_embeds.to(inputs_embeds.device)
         inputs_embeds[input_ids == llm.xrag_token_id] = retrieval_embeds
         return inputs_embeds
@@ -286,7 +293,12 @@ def _interpolate(v1: Sequence[float], v2: Sequence[float], lam: float) -> List[f
 #   random  : ignore anchors entirely; draw z ~ N(0, sigma^2 I) per dim
 #             (set --sigma to the empirical per-coord std of the embedding
 #             distribution to match natural scale)
-SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss", "random")
+#   bypass_random : like 'random', but additionally bypass the xRAG projector
+#             so z is inserted directly into the LLM input-embedding sequence
+#             at the xRAG token position. --sigma should match the per-coord
+#             std of model.model.embed_tokens.weight.
+SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss",
+                  "random", "bypass_random")
 # Modes that condition on a fixed point: re-encoding outputs back into the seed
 # pool would defeat the baseline, so we hold the conditioning vector constant.
 _FIXED_POINT_MODES = frozenset({"single", "mean", "medoid"})
@@ -382,11 +394,15 @@ def explore(
             out.append((base + noise).tolist())
         return out
 
-    if sampling_mode == "random":
+    if sampling_mode in ("random", "bypass_random"):
         # Draw z ~ N(0, sigma^2 I) per dim, ignoring anchors entirely.
-        # Calibrate sigma to the empirical per-coord std of the embedding
-        # distribution (e.g. ~4.77 for SFR-Embedding-Mistral on NoveltyBench)
-        # so that ||z|| matches the natural anchor scale.
+        # For 'random', sigma should match the SFR per-coord std (~4.77 on
+        # NoveltyBench) so ||z|| matches the natural anchor scale -- the
+        # projector then maps z onto the LLM embedding manifold.
+        # For 'bypass_random', sigma should match the LLM embed_tokens
+        # per-coord std (probed at runtime via probe_projector_distribution.py),
+        # because the projector is bypassed and z is inserted directly into
+        # the LLM input-embedding sequence.
         d = len(seeds[0])
         out = []
         for _ in range(k):
@@ -651,7 +667,11 @@ def main() -> None:
             "(stddev controlled by --sigma). "
             "'random' = ignore anchors; draw z ~ N(0, sigma^2 I) per dim, with "
             "--sigma set to the empirical per-coord std of the embedding "
-            "distribution to match natural scale."
+            "distribution to match natural scale. "
+            "'bypass_random' = like 'random', plus skip the xRAG projector "
+            "so z is inserted directly into the LLM input-embedding sequence "
+            "at the xRAG token position; --sigma should match the per-coord "
+            "std of model.embed_tokens.weight."
         ),
     )
     parser.add_argument(
@@ -671,6 +691,14 @@ def main() -> None:
     lam_spec = _parse_lambda_spec(args.lambda_value)
 
     initialize_models()
+
+    # bypass_random feeds the latent directly into the LLM input-embedding
+    # sequence at the xRAG token position, with the projector skipped.
+    if args.sampling_mode == "bypass_random":
+        llm._bypass_projector = True
+        print(f"[bypass_random] LLM embed_tokens per-coord std="
+              f"{llm.model.embed_tokens.weight.float().std().item():.4f}; "
+              f"using --sigma={args.sigma} for z ~ N(0, sigma^2 I).")
 
     input_path = Path(args.input)
     output_path = Path(args.output)
