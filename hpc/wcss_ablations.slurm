@@ -139,6 +139,10 @@ CELLS=(
   "D_calibrated/an_s5|--mode interp --anchor-noise 5.0"
   "D_calibrated/an_s20|--mode interp --anchor-noise 20.0"
   "D_calibrated/an_s50|--mode interp --anchor-noise 50.0"
+  # extreme: latent norm 21x / 42x / 105x the natural anchor norm
+  "D_calibrated/an_s100|--mode interp --anchor-noise 100.0"
+  "D_calibrated/an_s200|--mode interp --anchor-noise 200.0"
+  "D_calibrated/an_s500|--mode interp --anchor-noise 500.0"
   # random conditioning: ignore anchors entirely; sigma=4.77 = per-coord std
   # so ||z|| matches the natural anchor norm (~305).
   "D_calibrated/random|--mode random --sigma 4.77"
@@ -147,6 +151,9 @@ CELLS=(
   # natural-scale prior or just on a stochastic latent.
   "D_calibrated/random_s20|--mode random --sigma 20.0"
   "D_calibrated/random_s50|--mode random --sigma 50.0"
+  "D_calibrated/random_s100|--mode random --sigma 100.0"
+  "D_calibrated/random_s200|--mode random --sigma 200.0"
+  "D_calibrated/random_s500|--mode random --sigma 500.0"
 )
 
 run_cell() {
