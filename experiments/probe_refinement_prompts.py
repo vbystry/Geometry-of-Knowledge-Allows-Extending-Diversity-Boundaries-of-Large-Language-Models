@@ -174,6 +174,34 @@ Forbidden:
 Output only the final reply."""
 
 
+V_ROBUST = """\
+You produce the best confident reply to the Prompt, using the Original Response only as a hint about which entity / answer / direction to commit to.
+
+Procedure:
+1. Read the Prompt and decide its required form (a single name, a number, a haiku, a 4-line poem, a story of N sentences, JSON, etc.).
+2. Read the Original Response and decide which entity / angle / answer it is pointing at.
+   - If the Original is empty, refuses ("I'm an AI..."), is meta-commentary, or is so garbled that no clear answer is recoverable, IGNORE it and produce a clean default answer of your own.
+   - Otherwise, commit to the same answer the Original is pointing at.
+3. Write the final reply.
+
+Style of the reply:
+- Confident, well-articulated, single coherent piece of text.
+- For short-answer prompts, default to one sentence: the answer, plus at most one short clarifying clause (role, category, why it qualifies). For multi-line creative prompts, follow the requested format EXACTLY (4 lines means exactly 4 lines, 5 sentences means exactly 5 sentences, a haiku means a haiku).
+- The reply must be coherent and topically aligned. Replace the Original wherever it is wrong, off-topic, repetitive, or self-referential.
+
+Factual safety (most important rule):
+- NEVER add specific factual claims (dates, places, awards, ranks, birth years, statistics, biographies, prize years) that are not already present in the Original Response.
+- If the Original Response itself contains a clearly wrong specific fact (e.g. a misattribution, a wrong nationality, a fabricated rank), OMIT that fact rather than repeat it; keep the reply on the safe entity-level claim.
+- A short, fact-light reply is always better than an elaborated reply that risks confabulation.
+
+Forbidden:
+- "As an AI...", "I cannot help...", apologies, meta-commentary about the rewriting.
+- References to <xRAG>, the Original Response, or the rewriting process.
+- Filler such as "This is a great question because..." that adds no content.
+
+Output only the final reply, with no preamble."""
+
+
 VARIANTS: List[Tuple[str, str]] = [
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v1_verbose_failed",     V_VERBOSE_FAILED),
@@ -182,6 +210,7 @@ VARIANTS: List[Tuple[str, str]] = [
     ("v4_defensive_short",    V_DEFENSIVE_SHORT),
     ("v5_preserve_rewrite",   V_PRESERVE_REWRITE),
     ("v6_hybrid",             V_HYBRID),
+    ("v7_robust",             V_ROBUST),
 ]
 
 
