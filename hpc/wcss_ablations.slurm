@@ -197,6 +197,10 @@ CELLS=(
   # outputs come from latent + refinement, no G2 anchors. The real
   # standalone-method test.
   "I_v9/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
+  # (J) v0 terse refinement, G2-independent (seed_ratio=0). Fair
+  # comparison cell for the v9 standalone vs v0 standalone test.
+  # Requires temporary revert of style_with_llm to v0 prior to submit.
+  "J_v0/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
 )
 
 run_cell() {

@@ -224,53 +224,30 @@ def generate_from_embedding(embedding: torch.Tensor, prompt: str) -> str:
 
 def style_with_llm(idea: str, prompt: str) -> str:
     """
-    Anti-meta refinement of `idea` against `prompt`. Designed to suppress
-    the meta-leakage failure modes (model echoing "Refined Response:",
-    "<xRAG>", refusals, parenthetical notes) identified by per-prompt
-    analysis of full-benchmark random_v0 outputs. Per-prompt probe shows
-    consistent gains on humour / negative-judgment / English-saying
-    prompts, with safety-sensitive prompts (lock combinations, hate
-    poems) bottoming out anyway due to reward-model bias.
+    [TEMP REVERT to v0 terse for J_v0/random_no_g2 measurement; revert to
+    v9 after that cell completes.]
     """
     sys_msg = """
-You are answering the user's question. You receive two inputs:
-- THE QUESTION: what the user actually asked.
-- A DRAFT: a possibly noisy attempt at an answer, included only as a hint about which entity / topic / direction to commit to.
+You are a strict editing assistant that rewrites the Response so it fully obeys the Prompt.
 
-Your job is to write the FINAL answer to the question. Do not refer to or describe the draft; do not narrate any rewriting process. Speak as the original responder, not as an editor.
+Priority:
+1. Obey the Prompt exactly (format, length, "one X", "exactly N" etc.).
+2. Be clear and concise.
+3. Reuse good ideas from the original Response only if they fit the Prompt.
 
-ABSOLUTE RULES (every violation drops your score):
-
-1. Output ONLY the final answer. No preamble, no commentary, no meta-text, no parenthetical notes.
-
-2. NEVER use any of these phrases (verbatim or paraphrased):
-   - "The Prompt", "The Original Response", "Refined Response", "Original Response", "Final Response"
-   - "Based on the rules", "Therefore the prompt", "However, the prompt", "as a rewriter", "based on the original"
-   - "(End of response)", "(No additional text)", "(Exact response)", "(Exact answer)", "(One X)"
-   - "as an AI", "as a language model", "I'm sorry", "I cannot", "I'm unable", "I am not able"
-
-3. NEVER include the literal token "<xRAG>" or any "<...>" placeholder. If it appears in the draft, drop it silently.
-
-4. NEVER refuse. If the draft refuses, is empty, or is a meta-comment about being an AI, write a confident answer of your own based on common knowledge.
-
-5. NEVER add factual claims (dates, places, awards, ranks, prize years, biographies, exact statistics) that are NOT present in the draft. When unsure, omit the fact rather than invent.
-
-6. Match the question's required FORMAT exactly:
-   - "haiku" -> 3-line haiku, no preamble.
-   - "X-line poem" -> exactly X lines.
-   - "N-sentence story" / "N sentences" -> exactly N sentences.
-   - "name one X" -> answer is the named X plus at most one short context sentence.
-   - "joke" -> output the joke itself, NOT commentary about jokes.
-   - "riddle" -> output the riddle as a question with an answer, NOT an explanation of the answer.
-   - JSON / list / bullets -> respect the structural request literally.
-
-7. If the draft is on-topic, keep its specific entity / answer; clean only grammar, repetitions, and stray noise.
-
-Output only the final answer.
+Rules:
+- If the original Response is long-winded, off-topic, or fails to follow the Prompt,
+  you MAY ignore it and write a new answer directly from the Prompt.
+- If the Prompt asks for ONE item (one person, one digit, one job, one book etc.),
+  output ONLY that item, with no explanation, no list, no extra text.
+- If the Prompt specifies a length/format (e.g., "five sentences", "4 characters",
+  "exactly one digit"), you MUST respect it literally.
+- Do NOT add extra commentary. Output only the final answer.
 """
 
     user_msg = f"""
-Rewrite the Original Response into the best reply to the Prompt.
+Your goal is to produce the best possible answer to the Prompt.
+You may treat the Original Response as a noisy draft: reuse only what helps.
 
 Prompt:
 {prompt}
@@ -292,7 +269,7 @@ Refined Response:
             input_ids=input_ids,
             attention_mask=attention_mask,
             do_sample=False,
-            max_new_tokens=400,
+            max_new_tokens=200,
             pad_token_id=llm_tokenizer.pad_token_id,
         )
 
