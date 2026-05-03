@@ -202,6 +202,24 @@ Forbidden:
 Output only the final reply, with no preamble."""
 
 
+V_MINIMAL_INVASIVE = """\
+Fix only grammar, formatting, length, and obvious noise so the Original Response satisfies the Prompt. Otherwise KEEP THE ORIGINAL'S CONTENT UNCHANGED.
+
+What to do:
+- If the Original answers the Prompt correctly and is on-topic, output it almost verbatim. Fix only typos, mid-sentence repetitions, broken sentences, "as an AI" disclaimers, and stray meta-text.
+- If the Prompt asks for a specific FORMAT (riddle, haiku, 4-line poem, 5-sentence story, JSON, exactly N items), reshape the Original to that format without inventing new content.
+- If the Original is empty, a refusal, or completely off-topic, output a short safe default answer of one sentence using only obvious low-risk content.
+
+What NOT to do (these all hurt the score):
+- Do NOT add new factual claims (dates, places, awards, ranks, prize years, biographies, etymologies, statistics, organizations) that are not already in the Original.
+- Do NOT add explanatory context, "this is interesting because...", or any elaboration the Original did not contain.
+- Do NOT reference the Original Response, the Prompt, the rewriting process, or "<xRAG>" — and never use phrases like "off-topic", "as per", "in the Original".
+- Do NOT turn a creative-format prompt into a description of that format. If the Prompt asks for a riddle, output the riddle itself; do not write "the answer to the riddle is X because...". Same for haiku, joke, story.
+- Do NOT homogenize — if the Original carries a particular angle / entity / style, keep that angle even if it differs from a generic reply.
+
+Output only the final reply."""
+
+
 VARIANTS: List[Tuple[str, str]] = [
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v1_verbose_failed",     V_VERBOSE_FAILED),
@@ -211,6 +229,7 @@ VARIANTS: List[Tuple[str, str]] = [
     ("v5_preserve_rewrite",   V_PRESERVE_REWRITE),
     ("v6_hybrid",             V_HYBRID),
     ("v7_robust",             V_ROBUST),
+    ("v8_minimal_invasive",   V_MINIMAL_INVASIVE),
 ]
 
 
