@@ -193,12 +193,10 @@ CELLS=(
   #     refinement (the real test of G2 independence).
   "H_v8/random|--mode random --sigma 4.77"
   "H_v8/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
-  # (I) v9 anti-meta refinement (now installed as default in
-  # style_with_llm). Tests on full NoveltyBench whether the per-prompt
-  # gains observed in the probe (joke, English saying, Detroit) net out
-  # against the per-prompt losses on safety-sensitive prompts (lock
-  # combination, hate poem) at full benchmark scale.
-  "I_v9/random|--mode random --sigma 4.77"
+  # (I) v9 anti-meta refinement, G2-independent (seed_ratio=0): all 15
+  # outputs come from latent + refinement, no G2 anchors. The real
+  # standalone-method test.
+  "I_v9/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
 )
 
 run_cell() {
