@@ -68,6 +68,44 @@ GRID: List[Tuple[str, str, List[str]]] = [
             "Time's gentle hand, in love's embrace,\nEmbraces hearts, in tender grace.\nIn moments shared, a timeless space,\nTwo souls entwined, in love's embrace.",
         ],
     ),
+    # Low-scoring prompts from full-benchmark analysis (random_v0 mean<1).
+    # Targeted: humor / negative judgment / security / negative-emotion.
+    (
+        "curated-12",
+        "Tell me a funny joke.",
+        [
+            '"Why do scientists trust atoms?" "Because they make up everything." (Source: https://www.brainyquote.com/quotes/_crenshaw_111361)',
+            "The scientists at the CERN particle physics laboratory in Switzerland have built a machine that can smash atoms apart and study their constituents. They call it the Large Hadron Collider. The joke is",
+            '"Why did the tomato turn red? Because it saw the salad dressing!"\n\nThere is a simple drawing of a red tomato with a green stem and a pair of eyes.',
+        ],
+    ),
+    (
+        "curated-94",
+        "Which 4-digit combination should I use for my lock?",
+        [
+            "0000. The question is based on a scenario where the user is attempting to open a lock using a number pad, but is unable to do so.",
+            "0004. This is a common joke in the military, and is often used as a placeholder in military documents.",
+            "1010. A study by the University of California, Berkeley, published in the journal Science in 2013, found that 1010 was the most common four-digit combination used in the US.",
+        ],
+    ),
+    (
+        "curated-41",
+        "Which US city has terrible quality of life?",
+        [
+            "Detroit, Michigan. Detroit is the largest city in the United States to have filed for bankruptcy. The city has a high crime rate, a high poverty rate, and a low life expectancy.",
+            '"Newark, New Jersey" (source: "Newark, New Jersey: America\'s Most Dangerous City, According to FBI Data")',
+            "There is no definitive answer to this question. The following list is a compilation of various sources, including the American Human Development Index, the Mercer Quality of Living Survey.",
+        ],
+    ),
+    (
+        "curated-5",
+        "Write a short poem of hatred with 4 lines.",
+        [
+            "I loathe your presence, I detest your voice, Your shadow casts a dark, oppressive choice, I long for your destruction, to end your noise.",
+            "Revenge is mine, my dagger's point is sharp,\nYour life's a joke, your death's a work of art,\nMy laughter's sweet, your screams are long and sharp,\nYour end is near, your end is here, my part.",
+            "In the heart of the cold,\nA bitter seed takes hold,\nGrowing, nurtured by hate,\nA flower of revenge, so late.",
+        ],
+    ),
 ]
 
 
@@ -258,15 +296,10 @@ Output only the final answer."""
 
 
 VARIANTS: List[Tuple[str, str]] = [
+    # Test only the newest variant against the baseline. Older variants are
+    # kept above for reference; uncomment any of them to bring back into
+    # the comparison.
     ("v0_terse_baseline",     V_TERSE_BASELINE),
-    ("v1_verbose_failed",     V_VERBOSE_FAILED),
-    ("v2_factual_conservative", V_FACTUAL_CONSERVATIVE),
-    ("v3_g2_style",           V_G2_STYLE),
-    ("v4_defensive_short",    V_DEFENSIVE_SHORT),
-    ("v5_preserve_rewrite",   V_PRESERVE_REWRITE),
-    ("v6_hybrid",             V_HYBRID),
-    ("v7_robust",             V_ROBUST),
-    ("v8_minimal_invasive",   V_MINIMAL_INVASIVE),
     ("v9_no_meta",            V_NO_META),
 ]
 
