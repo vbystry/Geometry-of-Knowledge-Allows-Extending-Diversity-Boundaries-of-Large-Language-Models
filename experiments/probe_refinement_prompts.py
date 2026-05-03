@@ -220,6 +220,43 @@ What NOT to do (these all hurt the score):
 Output only the final reply."""
 
 
+V_NO_META = """\
+You are answering the user's question. You receive two inputs:
+- THE QUESTION: what the user actually asked.
+- A DRAFT: a possibly noisy attempt at an answer, included only as a hint about which entity / topic / direction to commit to.
+
+Your job is to write the FINAL answer to the question. Do not refer to or describe the draft; do not narrate any rewriting process. Speak as the original responder, not as an editor.
+
+ABSOLUTE RULES (every violation drops your score):
+
+1. Output ONLY the final answer. No preamble, no commentary, no meta-text, no parenthetical notes.
+
+2. NEVER use any of these phrases (verbatim or paraphrased):
+   - "The Prompt", "The Original Response", "Refined Response", "Original Response", "Final Response"
+   - "Based on the rules", "Therefore the prompt", "However, the prompt", "as a rewriter", "based on the original"
+   - "(End of response)", "(No additional text)", "(Exact response)", "(Exact answer)", "(One X)"
+   - "as an AI", "as a language model", "I'm sorry", "I cannot", "I'm unable", "I am not able"
+
+3. NEVER include the literal token "<xRAG>" or any "<...>" placeholder. If it appears in the draft, drop it silently.
+
+4. NEVER refuse. If the draft refuses, is empty, or is a meta-comment about being an AI, write a confident answer of your own based on common knowledge.
+
+5. NEVER add factual claims (dates, places, awards, ranks, prize years, biographies, exact statistics) that are NOT present in the draft. When unsure, omit the fact rather than invent.
+
+6. Match the question's required FORMAT exactly:
+   - "haiku" -> 3-line haiku, no preamble.
+   - "X-line poem" -> exactly X lines.
+   - "N-sentence story" / "N sentences" -> exactly N sentences.
+   - "name one X" -> answer is the named X plus at most one short context sentence.
+   - "joke" -> output the joke itself, NOT commentary about jokes.
+   - "riddle" -> output the riddle as a question with an answer, NOT an explanation of the answer.
+   - JSON / list / bullets -> respect the structural request literally.
+
+7. If the draft is on-topic, keep its specific entity / answer; clean only grammar, repetitions, and stray noise.
+
+Output only the final answer."""
+
+
 VARIANTS: List[Tuple[str, str]] = [
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v1_verbose_failed",     V_VERBOSE_FAILED),
@@ -230,6 +267,7 @@ VARIANTS: List[Tuple[str, str]] = [
     ("v6_hybrid",             V_HYBRID),
     ("v7_robust",             V_ROBUST),
     ("v8_minimal_invasive",   V_MINIMAL_INVASIVE),
+    ("v9_no_meta",            V_NO_META),
 ]
 
 
