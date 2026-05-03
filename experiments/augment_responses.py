@@ -89,7 +89,12 @@ def initialize_models() -> None:
     # XRAG placeholder token id
     llm.set_xrag_token_id(llm_tokenizer.convert_tokens_to_ids(XRAG_TOKEN))
 
-    # Monkey-patch prepare_inputs_embeds to ensure device alignment (unchanged)
+    # Monkey-patch prepare_inputs_embeds to ensure device alignment (unchanged
+    # except for the bypass-projector escape hatch, used by sampling_mode
+    # 'bypass_random' to feed the latent directly into the LLM input-embedding
+    # space without the xRAG projector).
+    llm._bypass_projector = False
+
     def patched_prepare_inputs_embeds(input_ids, retrieval_embeds):
         inputs_embeds = llm.model.embed_tokens(input_ids)
         retrieval_embeds = retrieval_embeds.view(-1, llm.retriever_hidden_size)
@@ -98,7 +103,9 @@ def initialize_models() -> None:
         num_retrieval_embeds = retrieval_embeds.shape[0]
         assert num_xrag_tokens == num_retrieval_embeds, (num_xrag_tokens, num_retrieval_embeds)
 
-        retrieval_embeds = llm.projector(retrieval_embeds.to(inputs_embeds.dtype))
+        retrieval_embeds = retrieval_embeds.to(inputs_embeds.dtype)
+        if not llm._bypass_projector:
+            retrieval_embeds = llm.projector(retrieval_embeds)
         retrieval_embeds = retrieval_embeds.to(inputs_embeds.device)
         inputs_embeds[input_ids == llm.xrag_token_id] = retrieval_embeds
         return inputs_embeds
@@ -217,14 +224,21 @@ def generate_from_embedding(embedding: torch.Tensor, prompt: str) -> str:
 
 def style_with_llm(idea: str, prompt: str) -> str:
     """
-    Rewrite `idea` to obey `prompt` strictly (no retrieval).
-    (This preserves the original behavior; fmt_example was never used.)
+    Constraint-preserving realignment (the operator $r$ in the paper).
+
+    Rewrites a candidate response so that it strictly obeys the original
+    prompt's format / length / item-count constraints, while reusing the
+    candidate's content where it fits. The terse, format-respecting prompt
+    below was selected via the realignment-prompt ablation (see
+    experiments/probe_refinement_prompts.py); verbose variants
+    introduce confabulation, and prompts that mention "original" or
+    "creative" introduce meta-leakage that hurts utility.
     """
     sys_msg = """
 You are a strict editing assistant that rewrites the Response so it fully obeys the Prompt.
 
 Priority:
-1. Obey the Prompt exactly (format, length, “one X”, “exactly N” etc.).
+1. Obey the Prompt exactly (format, length, "one X", "exactly N" etc.).
 2. Be clear and concise.
 3. Reuse good ideas from the original Response only if they fit the Prompt.
 
@@ -233,8 +247,8 @@ Rules:
   you MAY ignore it and write a new answer directly from the Prompt.
 - If the Prompt asks for ONE item (one person, one digit, one job, one book etc.),
   output ONLY that item, with no explanation, no list, no extra text.
-- If the Prompt specifies a length/format (e.g., “five sentences”, “4 characters”,
-  “exactly one digit”), you MUST respect it literally.
+- If the Prompt specifies a length/format (e.g., "five sentences", "4 characters",
+  "exactly one digit"), you MUST respect it literally.
 - Do NOT add extra commentary. Output only the final answer.
 """
 
@@ -286,7 +300,12 @@ def _interpolate(v1: Sequence[float], v2: Sequence[float], lam: float) -> List[f
 #   random  : ignore anchors entirely; draw z ~ N(0, sigma^2 I) per dim
 #             (set --sigma to the empirical per-coord std of the embedding
 #             distribution to match natural scale)
-SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss", "random")
+#   bypass_random : like 'random', but additionally bypass the xRAG projector
+#             so z is inserted directly into the LLM input-embedding sequence
+#             at the xRAG token position. --sigma should match the per-coord
+#             std of model.model.embed_tokens.weight.
+SAMPLING_MODES = ("interp", "single", "mean", "medoid", "gauss",
+                  "random", "bypass_random")
 # Modes that condition on a fixed point: re-encoding outputs back into the seed
 # pool would defeat the baseline, so we hold the conditioning vector constant.
 _FIXED_POINT_MODES = frozenset({"single", "mean", "medoid"})
@@ -382,11 +401,15 @@ def explore(
             out.append((base + noise).tolist())
         return out
 
-    if sampling_mode == "random":
+    if sampling_mode in ("random", "bypass_random"):
         # Draw z ~ N(0, sigma^2 I) per dim, ignoring anchors entirely.
-        # Calibrate sigma to the empirical per-coord std of the embedding
-        # distribution (e.g. ~4.77 for SFR-Embedding-Mistral on NoveltyBench)
-        # so that ||z|| matches the natural anchor scale.
+        # For 'random', sigma should match the SFR per-coord std (~4.77 on
+        # NoveltyBench) so ||z|| matches the natural anchor scale -- the
+        # projector then maps z onto the LLM embedding manifold.
+        # For 'bypass_random', sigma should match the LLM embed_tokens
+        # per-coord std (probed at runtime via probe_projector_distribution.py),
+        # because the projector is bypassed and z is inserted directly into
+        # the LLM input-embedding sequence.
         d = len(seeds[0])
         out = []
         for _ in range(k):
@@ -433,19 +456,32 @@ def expand_record_generations(
     model = rec.get("model", "unknown-model")
     gens_in: List[str] = rec.get("generations", [])
 
-    n_seed = max(1, int(len(gens_in) * seed_ratio)) if gens_in else 1
+    # n_seed: how many input generations are kept verbatim at the start
+    # of the output. seed_ratio == 0 means "keep zero", used for the
+    # G2-independence ablation. seed_ratio > 0 always keeps at least 1.
+    if gens_in and seed_ratio == 0:
+        n_seed = 0
+    elif gens_in:
+        n_seed = max(1, int(len(gens_in) * seed_ratio))
+    else:
+        n_seed = 0
 
     if not gens_in:
         gens_in = [prompt]
 
-    # Seeds: first n_seed generations (matches original script’s effective behavior)
     seeds_text = gens_in[:n_seed]
-    if not seeds_text:
-        seeds_text = [prompt]
 
-    with torch.no_grad():
-        seed_vecs_t = embed_text(seeds_text)  # [S, D]
-    seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
+    # Anchors for explore(): embed kept seeds when present; otherwise use
+    # the prompt as a placeholder embedding (random / bypass_random modes
+    # ignore the anchor content and only need a vector of the right shape).
+    if seeds_text:
+        with torch.no_grad():
+            seed_vecs_t = embed_text(seeds_text)  # [S, D]
+        seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
+    else:
+        with torch.no_grad():
+            seed_vecs_t = embed_text([prompt])
+        seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
 
     # ── weak-seed ablation: degrade anchor coverage / quality ───────────────
     if max_anchors is not None and max_anchors > 0:
@@ -456,7 +492,7 @@ def expand_record_generations(
         arr = arr + torch.randn_like(arr) * float(anchor_noise)
         seed_vecs = arr.tolist()
 
-    fmt_example = seeds_text[0]  # gating only (matches original)
+    fmt_example = seeds_text[0] if seeds_text else prompt  # gating only
     generated: List[str] = []
 
     update_seed_pool = sampling_mode not in _FIXED_POINT_MODES
@@ -544,8 +580,20 @@ def process_jsonl(
     Seeding behavior preserved exactly.
     """
     if seed is not None:
+        # Seed all stochastic sources used by the pipeline:
+        #   - random          : lambda sign / pair selection / anchor index
+        #   - torch (cpu+cuda): generation sampling, gauss/random latents
+        #   - numpy           : not used directly here, but seeded for safety
+        #                       in case any vendored xRAG helper draws from it
         random.seed(seed)
         torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        try:
+            import numpy as _np
+            _np.random.seed(seed)
+        except ImportError:
+            pass
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
@@ -651,7 +699,11 @@ def main() -> None:
             "(stddev controlled by --sigma). "
             "'random' = ignore anchors; draw z ~ N(0, sigma^2 I) per dim, with "
             "--sigma set to the empirical per-coord std of the embedding "
-            "distribution to match natural scale."
+            "distribution to match natural scale. "
+            "'bypass_random' = like 'random', plus skip the xRAG projector "
+            "so z is inserted directly into the LLM input-embedding sequence "
+            "at the xRAG token position; --sigma should match the per-coord "
+            "std of model.embed_tokens.weight."
         ),
     )
     parser.add_argument(
@@ -671,6 +723,14 @@ def main() -> None:
     lam_spec = _parse_lambda_spec(args.lambda_value)
 
     initialize_models()
+
+    # bypass_random feeds the latent directly into the LLM input-embedding
+    # sequence at the xRAG token position, with the projector skipped.
+    if args.sampling_mode == "bypass_random":
+        llm._bypass_projector = True
+        print(f"[bypass_random] LLM embed_tokens per-coord std="
+              f"{llm.model.embed_tokens.weight.float().std().item():.4f}; "
+              f"using --sigma={args.sigma} for z ~ N(0, sigma^2 I).")
 
     input_path = Path(args.input)
     output_path = Path(args.output)

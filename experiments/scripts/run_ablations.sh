@@ -54,6 +54,25 @@ WEAK_GRID=(
   "2:0.10"   # combined: few + noisy anchors
 )
 
+# (D) Sigma-calibration grid for the random sampler (no anchors).
+# Reference: SFR-Embedding-Mistral on NoveltyBench has per-coord std ~4.77,
+# so sigma=4.77 gives ||z|| matching the natural anchor norm. The plateau
+# across orders of magnitude is the RMSNorm-magnitude-invariance result.
+RANDOM_SIGMA_GRID=(4.77 50 500 5000 10000)
+
+# (D') Anchor-noise grid for interp: cosine(orig, perturbed) drops to
+# 0.98/0.92/0.69/~0.18/~0.07 for sigma in {1,2,5,20,50}. Noise far above
+# the natural scale effectively turns anchors into random vectors.
+ANCHOR_NOISE_GRID=(1.0 5.0 20.0 50.0 200.0)
+
+# (E) bypass-projector sigma grid. Probe values from
+# probe_projector_distribution.py:
+#   0.0027 = LLM embed_tokens per-coord std (||z|| ~ 0.17, natural Mistral)
+#   1.0    = intermediate (||z|| ~ 64)
+#   200    = projector-image per-coord std (||z|| ~ 12.8k, what xRAG was
+#            fine-tuned to receive when the projector is in the loop)
+BYPASS_SIGMA_GRID=(0.0027 1.0 200.0)
+
 # ── parse arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -130,5 +149,37 @@ for entry in "${WEAK_GRID[@]}"; do
   run_cell "$OUT_ROOT/C_weak_seed/$cell_name" "${extra[@]}"
 done
 
+# ── (D) sigma calibration for the random sampler ────────────────────────
+# Tests RMSNorm magnitude invariance: Distinct/Utility should plateau across
+# orders of magnitude in sigma because the projector RMSNorm absorbs ||z||.
+for sig in "${RANDOM_SIGMA_GRID[@]}"; do
+  run_cell "$OUT_ROOT/D_calibrated/random_s${sig}" --mode random --sigma "$sig"
+done
+
+# (D') Anchor-noise sweep for interp at increasing sigma. Companion to (D):
+# tests whether anchor identity matters once noise is large enough to
+# randomise anchors.
+for sig in "${ANCHOR_NOISE_GRID[@]}"; do
+  run_cell "$OUT_ROOT/D_calibrated/an_s${sig}" --mode interp --anchor-noise "$sig"
+done
+
+# ── (E) bypass projector ────────────────────────────────────────────────
+# Insert z directly into the LLM input-embedding sequence at the xRAG token
+# position, skipping the projector. Three sigma scales: natural Mistral
+# embedding, intermediate, and projector-image scale.
+for sig in "${BYPASS_SIGMA_GRID[@]}"; do
+  run_cell "$OUT_ROOT/E_bypass/bypass_s${sig}" --mode bypass_random --sigma "$sig"
+done
+
+# ── (H) standalone (G2-independence) ─────────────────────────────────────
+# Same random sampler but seed-ratio=0 means no G2 anchors are kept;
+# all 15 outputs come from latent + realignment. This is the fairer
+# "method works without G2" cell.
+run_cell "$OUT_ROOT/H_standalone/random_no_g2" \
+    --mode random --sigma 4.77 --seed-ratio 0
+
 echo
 echo "All ablation cells written under: $OUT_ROOT"
+echo
+echo "Note: realignment-prompt ablation (F/G in the paper) is run via"
+echo "      experiments/probe_refinement_prompts.py (small grid harness)."

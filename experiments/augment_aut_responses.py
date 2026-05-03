@@ -474,6 +474,13 @@ def process_json(
     if seed is not None:
         random.seed(seed)
         torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        try:
+            import numpy as _np
+            _np.random.seed(seed)
+        except ImportError:
+            pass
 
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
