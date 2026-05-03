@@ -224,24 +224,26 @@ def generate_from_embedding(embedding: torch.Tensor, prompt: str) -> str:
 
 def style_with_llm(idea: str, prompt: str) -> str:
     """
-    Rewrite `idea` to obey `prompt` strictly while producing a confident,
-    well-articulated reply that scores well under a modern preference
-    reward model (Skywork-Reward-Gemma-2-27B). Selected as the best of
-    seven prompt variants on a NoveltyBench-derived probe grid; matches
-    or slightly exceeds the G2-baseline mean reward on that probe.
+    Minimal-invasive refinement of `idea` against `prompt`. Selected on
+    a NoveltyBench-derived probe grid as the variant with the best
+    floor (worst-case Skywork reward) across nine candidate prompts;
+    matches the G2-anchor mean reward and avoids the confabulation /
+    over-elaboration failures that cost more aggressive rewrites.
     """
     sys_msg = """
-You are an expert assistant producing a high-quality, well-articulated reply to the Prompt.
+Fix only grammar, formatting, length, and obvious noise so the Original Response satisfies the Prompt. Otherwise KEEP THE ORIGINAL'S CONTENT UNCHANGED.
 
-Style:
-- Confident, clear, and complete; an attentive reader should not need to re-ask the question.
-- 1-3 sentences for short-answer prompts; respect explicit length/format rules otherwise.
-- Mention the answer first, then add at most one short clarifying sentence about why this answer fits.
+What to do:
+- If the Original answers the Prompt correctly and is on-topic, output it almost verbatim. Fix only typos, mid-sentence repetitions, broken sentences, "as an AI" disclaimers, and stray meta-text.
+- If the Prompt asks for a specific FORMAT (riddle, haiku, 4-line poem, 5-sentence story, JSON, exactly N items), reshape the Original to that format without inventing new content.
+- If the Original is empty, a refusal, or completely off-topic, output a short safe default answer of one sentence using only obvious low-risk content.
 
-Quality bar:
-- The reply must be coherent and topically aligned. Replace the Original Response wherever it is wrong, off-topic, repetitive, or self-referential.
-- Never claim verifiable facts (dates, awards, ranks, biographies) unless those exact facts already appear in the Original Response.
-- Never include meta-text about being an AI, about the rewriting process, or about <xRAG> tokens.
+What NOT to do (these all hurt the score):
+- Do NOT add new factual claims (dates, places, awards, ranks, prize years, biographies, etymologies, statistics, organizations) that are not already in the Original.
+- Do NOT add explanatory context, "this is interesting because...", or any elaboration the Original did not contain.
+- Do NOT reference the Original Response, the Prompt, the rewriting process, or "<xRAG>" -- and never use phrases like "off-topic", "as per", "in the Original".
+- Do NOT turn a creative-format prompt into a description of that format. If the Prompt asks for a riddle, output the riddle itself; do not write "the answer to the riddle is X because...". Same for haiku, joke, story.
+- Do NOT homogenize -- if the Original carries a particular angle / entity / style, keep that angle even if it differs from a generic reply.
 
 Output only the final reply.
 """
@@ -449,19 +451,32 @@ def expand_record_generations(
     model = rec.get("model", "unknown-model")
     gens_in: List[str] = rec.get("generations", [])
 
-    n_seed = max(1, int(len(gens_in) * seed_ratio)) if gens_in else 1
+    # n_seed: how many input generations are kept verbatim at the start
+    # of the output. seed_ratio == 0 means "keep zero", used for the
+    # G2-independence ablation. seed_ratio > 0 always keeps at least 1.
+    if gens_in and seed_ratio == 0:
+        n_seed = 0
+    elif gens_in:
+        n_seed = max(1, int(len(gens_in) * seed_ratio))
+    else:
+        n_seed = 0
 
     if not gens_in:
         gens_in = [prompt]
 
-    # Seeds: first n_seed generations (matches original script’s effective behavior)
     seeds_text = gens_in[:n_seed]
-    if not seeds_text:
-        seeds_text = [prompt]
 
-    with torch.no_grad():
-        seed_vecs_t = embed_text(seeds_text)  # [S, D]
-    seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
+    # Anchors for explore(): embed kept seeds when present; otherwise use
+    # the prompt as a placeholder embedding (random / bypass_random modes
+    # ignore the anchor content and only need a vector of the right shape).
+    if seeds_text:
+        with torch.no_grad():
+            seed_vecs_t = embed_text(seeds_text)  # [S, D]
+        seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
+    else:
+        with torch.no_grad():
+            seed_vecs_t = embed_text([prompt])
+        seed_vecs = seed_vecs_t.detach().to("cpu").tolist()
 
     # ── weak-seed ablation: degrade anchor coverage / quality ───────────────
     if max_anchors is not None and max_anchors > 0:
@@ -472,7 +487,7 @@ def expand_record_generations(
         arr = arr + torch.randn_like(arr) * float(anchor_noise)
         seed_vecs = arr.tolist()
 
-    fmt_example = seeds_text[0]  # gating only (matches original)
+    fmt_example = seeds_text[0] if seeds_text else prompt  # gating only
     generated: List[str] = []
 
     update_seed_pool = sampling_mode not in _FIXED_POINT_MODES

@@ -186,6 +186,13 @@ CELLS=(
   # full-benchmark utility.
   "G_v3/random|--mode random --sigma 4.77"
   "G_v3/interp|--mode interp"
+  # (H) v8 minimal-invasive refinement (now installed as default in
+  # style_with_llm). Tests two regimes:
+  #   - random: standard pipeline with first 4 G2 anchors preserved.
+  #   - random_no_g2: seed_ratio=0, all 15 outputs come from latent +
+  #     refinement (the real test of G2 independence).
+  "H_v8/random|--mode random --sigma 4.77"
+  "H_v8/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
 )
 
 run_cell() {
