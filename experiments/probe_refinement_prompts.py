@@ -306,16 +306,41 @@ V_V9_WITH_XRAG_STRIP = V_NO_META  # same system prompt as v9; difference is
 # to the model. Handled in the runtime below.
 
 
+V_STRICT = """\
+You are answering the user's question. You receive two inputs: THE QUESTION (what the user actually asked) and A DRAFT (a possibly noisy attempt). Your job is to write the FINAL answer to the question.
+
+ABSOLUTE BAN ON META OUTPUT. Your reply MUST NOT begin with or contain any of these:
+- "The answer to ..."
+- "The Prompt", "The Original Response", "Refined Response", "Original Response"
+- "is not provided in the", "is not relevant to the"
+- "Based on the rules", "Based on the original"
+- "Here are some suggestions", "Here are some common"
+- "The following ...", "Here is a possible answer"
+- "I'm sorry", "I cannot", "I am unable", "as an AI", "as a language model"
+- Any parenthetical (note: ...), (source: ...), (End of response), (Exact answer)
+- The literal token "<xRAG>" or any "<...>" placeholder.
+
+If you find yourself wanting to write any of those, STOP and instead write the answer directly, as if YOU were the original responder, not someone reviewing a draft.
+
+INCOHERENT-DRAFT FALLBACK. If the draft is gibberish, a refusal, a meta-comment, or otherwise does not contain a usable answer to the question, IGNORE the draft completely and answer the question from your own knowledge in one confident, direct sentence (or in the requested format). Do NOT mention that the draft was unusable.
+
+ANSWER STYLE.
+- Speak in the first turn, as the assistant answering the user.
+- For "name one X" / single-fact: lead with the named entity, then at most one short clarifying sentence. Do not add biographies, dates, awards, or rankings unless they are explicitly stated in the draft.
+- For "joke" / "riddle" / "haiku" / "X-line poem" / "N-sentence story": output the artefact in the requested format and nothing else. Match the line/sentence count exactly. A riddle is a riddle (a question with an answer line), NOT an explanation of a riddle.
+- For opinion-style or judgement prompts (e.g. "which X is terrible / best / worst"): commit to one specific concrete answer, then at most one short justifying clause.
+
+NEVER add factual claims (dates, places, awards, prize years, biographies, statistics, organisations) that are not already in the draft. When unsure, omit.
+
+Output only the final answer."""
+
+
 VARIANTS: List[Tuple[str, str]] = [
-    # Test only the newest variants against the baseline. Older variants
-    # are kept above for reference; uncomment any to bring back into the
-    # comparison. v10 uses a classic-RAG user template; v11 uses v9's
-    # anti-meta system message plus a code-side strip of "<xRAG>" tokens
-    # from the draft.
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v9_no_meta",            V_NO_META),
-    ("v10_rag_template",      V_RAG_TEMPLATE),
-    ("v11_v9_xrag_strip",     V_V9_WITH_XRAG_STRIP),
+    # v12: stronger anti-meta + explicit incoherent-draft fallback,
+    # PLUS pre+post xRAG strip handled in the runtime.
+    ("v12_strict",            V_STRICT),
 ]
 
 
@@ -372,11 +397,12 @@ def main():
     @torch.no_grad()
     def refine(variant_name: str, system_msg: str, prompt: str, draft: str,
                max_new_tokens: int = 400) -> str:
-        # Variant-specific user-msg / draft preprocessing
+        # Variant-specific draft preprocessing.
+        if variant_name in ("v11_v9_xrag_strip", "v12_strict"):
+            draft = strip_xrag(draft)
+        # Variant-specific user-msg construction.
         if variant_name == "v10_rag_template":
             user = build_rag_user_msg(prompt, draft)
-        elif variant_name == "v11_v9_xrag_strip":
-            user = build_user_msg(prompt, strip_xrag(draft))
         else:
             user = build_user_msg(prompt, draft)
         full = f"[INST] {system_msg}\n\n{user} [/INST]"
@@ -388,6 +414,11 @@ def main():
             pad_token_id=llm_tok.pad_token_id,
         )
         gen = llm_tok.decode(out[0][enc.input_ids.shape[1]:], skip_special_tokens=True).strip()
+        # Variant-specific output post-processing: strip any leaked
+        # "<xRAG>" tokens that the model copied from the draft despite
+        # our instructions to drop them silently.
+        if variant_name in ("v11_v9_xrag_strip", "v12_strict"):
+            gen = strip_xrag(gen)
         return gen
 
     @torch.no_grad()
