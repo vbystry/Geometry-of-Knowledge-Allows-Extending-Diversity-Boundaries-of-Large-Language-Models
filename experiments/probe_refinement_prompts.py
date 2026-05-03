@@ -295,12 +295,27 @@ ABSOLUTE RULES (every violation drops your score):
 Output only the final answer."""
 
 
+V_RAG_TEMPLATE = """\
+You are a helpful assistant. Answer the user's question. A short background passage is provided; it may or may not be relevant -- use it only if it helps you answer."""
+
+# v10 uses a different user_msg template (classic RAG framing) -- handled
+# below in the runtime as a special case.
+
+V_V9_WITH_XRAG_STRIP = V_NO_META  # same system prompt as v9; difference is
+# in preprocessing: draft is stripped of "<xRAG>" tokens before being fed
+# to the model. Handled in the runtime below.
+
+
 VARIANTS: List[Tuple[str, str]] = [
-    # Test only the newest variant against the baseline. Older variants are
-    # kept above for reference; uncomment any of them to bring back into
-    # the comparison.
+    # Test only the newest variants against the baseline. Older variants
+    # are kept above for reference; uncomment any to bring back into the
+    # comparison. v10 uses a classic-RAG user template; v11 uses v9's
+    # anti-meta system message plus a code-side strip of "<xRAG>" tokens
+    # from the draft.
     ("v0_terse_baseline",     V_TERSE_BASELINE),
     ("v9_no_meta",            V_NO_META),
+    ("v10_rag_template",      V_RAG_TEMPLATE),
+    ("v11_v9_xrag_strip",     V_V9_WITH_XRAG_STRIP),
 ]
 
 
@@ -321,6 +336,23 @@ def build_user_msg(prompt: str, draft: str) -> str:
     )
 
 
+def build_rag_user_msg(prompt: str, draft: str) -> str:
+    """Classic RAG-style framing: question + background, answer the question."""
+    return (
+        f"Question: {prompt}\n\n"
+        f"Background (may or may not be relevant):\n{draft}\n\n"
+        "Answer the question. You may use the background if it helps.\n"
+    )
+
+
+def strip_xrag(text: str) -> str:
+    """Remove the literal '<xRAG>' token (and adjacent whitespace) that
+    sometimes leaks from the latent injection into the raw draft."""
+    import re
+    cleaned = re.sub(r"\s*<xRAG>\s*", " ", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
 def main():
     print(f"Loading LLM: {LLM_NAME} ...")
     llm = AutoModelForCausalLM.from_pretrained(
@@ -338,8 +370,15 @@ def main():
     reward_tok = AutoTokenizer.from_pretrained(REWARD_NAME)
 
     @torch.no_grad()
-    def refine(system_msg: str, prompt: str, draft: str, max_new_tokens: int = 400) -> str:
-        user = build_user_msg(prompt, draft)
+    def refine(variant_name: str, system_msg: str, prompt: str, draft: str,
+               max_new_tokens: int = 400) -> str:
+        # Variant-specific user-msg / draft preprocessing
+        if variant_name == "v10_rag_template":
+            user = build_rag_user_msg(prompt, draft)
+        elif variant_name == "v11_v9_xrag_strip":
+            user = build_user_msg(prompt, strip_xrag(draft))
+        else:
+            user = build_user_msg(prompt, draft)
         full = f"[INST] {system_msg}\n\n{user} [/INST]"
         enc = llm_tok(full, return_tensors="pt").to(llm.device)
         out = llm.generate(
@@ -397,7 +436,7 @@ def main():
             print(f"\n=== {pid} draft#{di+1}: {prompt}")
             print(f"  DRAFT ({len(draft)} chars): {draft[:140].strip()}{'...' if len(draft) > 140 else ''}")
             for vname, vsys in VARIANTS:
-                refined = refine(vsys, prompt, draft)
+                refined = refine(vname, vsys, prompt, draft)
                 u = score(prompt, refined)
                 summary[vname].append(u)
                 short = refined[:140].strip().replace("\n", " ")
