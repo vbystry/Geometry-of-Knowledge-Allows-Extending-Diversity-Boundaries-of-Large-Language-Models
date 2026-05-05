@@ -2,14 +2,15 @@
 # NoveltyBench ablation grid on WCSS (lem-gpu, 4× H100).
 #
 # Reproduces every ablation cell that appears in the paper:
-#   A. sampling strategy (interp/single/mean/medoid/gauss) × realignment
-#      ON  -> A_sampling/style_on/{mode}
-#   B. realignment OFF                                         (--no-style)
-#      -> B_sampling/style_off/{mode}
+#   D. parameter sweep (paper §5.1): random sigma in
+#      {0.05, 0.5, 1, 2, 4.77, 20, 50, 500, 5000, 10000};
+#      interp lambda in {0.5, 2, 4, 6, 8, 10};
+#      anchor-noise sweep in {1, 5, 20, 50, 200}.
+#      Motivates sigma=4.77 / lambda~U([6,10]) for the rest.
+#   A. sampling strategy (interp / single / mean / medoid / gauss /
+#      random) with realignment ON  -> A_sampling/style_on/{mode}
+#   B. same with realignment OFF (--no-style) -> B_sampling/style_off/{mode}
 #   C. weak-seed robustness (interp + max-anchors / anchor-noise grid)
-#   D. sigma calibration: random sampler at sigma in
-#      {4.77, 50, 500, 5000, 10000} and anchor-noise sweep at
-#      sigma in {1, 5, 20, 50, 200} (RMSNorm-magnitude-invariance)
 #   E. bypass projector at three probe-derived sigmas
 #      {0.0027, 1.0, 200}  (E_bypass/bypass_s{sigma})
 #   H. standalone (G2-independent): random sampler with seed-ratio=0
@@ -99,6 +100,11 @@ export -f uv
 INPUT="${INPUT:-results/curated/g2_theta0.3_temp1_iter15/generations.jsonl}"
 OUT_ROOT="${OUT_ROOT:-results/ablations}"
 TARGET_N="${TARGET_N:-15}"
+# Ablations use the hybrid regime (SEED_RATIO=0.3, G2 outputs kept as
+# anchors) so that anchor-based samplers (interp / single / mean /
+# medoid / gauss) have a non-degenerate anchor pool to operate on.
+# The H_standalone/random_no_g2 cell additionally probes the
+# G2-independent regime (SEED_RATIO=0).
 SEED_RATIO="${SEED_RATIO:-0.3}"
 LAMBDA="${LAMBDA:-6-10}"
 SEED="${SEED:-42}"
@@ -115,49 +121,81 @@ mkdir -p "$OUT_ROOT" logs
 # ── ablation cell list ─────────────────────────────────────────────────
 # Each entry: "subdir | extra args to run_augmentation.sh"
 CELLS=(
-  # (A) sampling strategy, realignment ON
-  "A_sampling/style_on/interp|--mode interp"
-  "A_sampling/style_on/single|--mode single"
-  "A_sampling/style_on/mean|--mode mean"
-  "A_sampling/style_on/medoid|--mode medoid"
-  "A_sampling/style_on/gauss|--mode gauss"
-  # (B) sampling strategy, realignment OFF
-  "B_sampling/style_off/interp|--mode interp --no-style"
-  "B_sampling/style_off/single|--mode single --no-style"
-  "B_sampling/style_off/mean|--mode mean --no-style"
-  "B_sampling/style_off/medoid|--mode medoid --no-style"
-  "B_sampling/style_off/gauss|--mode gauss --no-style"
-  # (C) weak-seed robustness (interp only)
-  "C_weak_seed/ma1|--mode interp --max-anchors 1"
-  "C_weak_seed/ma2|--mode interp --max-anchors 2"
-  "C_weak_seed/an010|--mode interp --anchor-noise 0.10"
-  "C_weak_seed/an025|--mode interp --anchor-noise 0.25"
-  "C_weak_seed/ma2_an010|--mode interp --max-anchors 2 --anchor-noise 0.10"
-  # (D) sigma calibration for random sampler (RMSNorm-magnitude-invariance):
-  # SFR per-coord std = 4.77 → ||z|| matches natural anchor norm. The plateau
-  # across orders of magnitude is the load-bearing claim.
+  # (D) Parameter-sweep ablation [paper §5.1]: motivates the choice of
+  # sigma=4.77 / lambda~U([6,10]) used in the rest of the ablations.
+  # Random sigma sweep: small values probe the "spread too small to
+  # leave the seed cluster" collapse; large values probe the plateau.
+  "D_calibrated/random_s0.05|--mode random --sigma 0.05"
+  "D_calibrated/random_s0.5|--mode random --sigma 0.5"
+  "D_calibrated/random_s1|--mode random --sigma 1.0"
+  "D_calibrated/random_s2|--mode random --sigma 2.0"
   "D_calibrated/random_s4.77|--mode random --sigma 4.77"
+  "D_calibrated/random_s20|--mode random --sigma 20.0"
   "D_calibrated/random_s50|--mode random --sigma 50.0"
   "D_calibrated/random_s500|--mode random --sigma 500.0"
   "D_calibrated/random_s5000|--mode random --sigma 5000.0"
   "D_calibrated/random_s10000|--mode random --sigma 10000.0"
-  # (D') anchor-noise sweep for interp: cosine(orig, perturbed) drops to
-  # 0.98/0.69/~0.18/~0.07/~0.02 at sigma in {1, 5, 20, 50, 200}.
-  "D_calibrated/an_s1|--mode interp --anchor-noise 1.0"
-  "D_calibrated/an_s5|--mode interp --anchor-noise 5.0"
+  # Lambda sweep for interp: small lambda keeps z inside the seed
+  # cluster (low spread, low diversity); large lambda escapes it.
+  "D_calibrated/interp_lam0.5|--mode interp --lambda 0.5"
+  "D_calibrated/interp_lam2|--mode interp --lambda 2.0"
+  "D_calibrated/interp_lam4|--mode interp --lambda 4.0"
+  "D_calibrated/interp_lam6|--mode interp --lambda 6.0"
+  "D_calibrated/interp_lam8|--mode interp --lambda 8.0"
+  "D_calibrated/interp_lam10|--mode interp --lambda 10.0"
+  # Extreme anchor-noise levels (interp): cos(orig, perturbed) drops to
+  # 0.18 / 0.07 / 0.02 at sigma in {20, 50, 200}; mid-range (1-5) is
+  # in C_weak_seed below.
   "D_calibrated/an_s20|--mode interp --anchor-noise 20.0"
   "D_calibrated/an_s50|--mode interp --anchor-noise 50.0"
   "D_calibrated/an_s200|--mode interp --anchor-noise 200.0"
-  # (E) bypass_random: feed z directly into the LLM input-embedding sequence
-  # at the xRAG token position (no projector). Probe-derived sigmas:
+
+  # (A) Sampling-strategy ablation [paper §5.2], realignment ON.
+  # gauss uses sigma=0.05 (the historical default; ||noise|| ~ 1% of
+  # natural anchor norm -- almost a fixed-point baseline). random uses
+  # sigma=4.77 chosen by the parameter sweep above.
+  "A_sampling/style_on/interp|--mode interp"
+  "A_sampling/style_on/single|--mode single"
+  "A_sampling/style_on/mean|--mode mean"
+  "A_sampling/style_on/medoid|--mode medoid"
+  "A_sampling/style_on/gauss|--mode gauss --sigma 0.05"
+  "A_sampling/style_on/random|--mode random --sigma 4.77"
+  # (B) Sampling-strategy ablation, realignment OFF.
+  "B_sampling/style_off/interp|--mode interp --no-style"
+  "B_sampling/style_off/single|--mode single --no-style"
+  "B_sampling/style_off/mean|--mode mean --no-style"
+  "B_sampling/style_off/medoid|--mode medoid --no-style"
+  "B_sampling/style_off/gauss|--mode gauss --sigma 0.05 --no-style"
+  "B_sampling/style_off/random|--mode random --sigma 4.77 --no-style"
+
+  # (C) Weak-seed robustness (interp only). max-anchors caps the
+  # *initial* anchor pool only; the pool grows as generated outputs are
+  # re-encoded and appended (self-bootstrapping interp). Anchor-noise
+  # sweep covers small (sub-natural) and natural-scale perturbations:
+  # cos(orig, perturbed) at sigma {0.10, 0.25, 1, 2, 5} ~ 1.0 / 0.99 /
+  # 0.98 / 0.92 / 0.69 (vs natural anchor norm ~305 with per-coord std
+  # 4.77). Extreme sigmas {20, 50, 200} are in D_calibrated.
+  "C_weak_seed/ma1|--mode interp --max-anchors 1"
+  "C_weak_seed/ma2|--mode interp --max-anchors 2"
+  "C_weak_seed/an010|--mode interp --anchor-noise 0.10"
+  "C_weak_seed/an025|--mode interp --anchor-noise 0.25"
+  "C_weak_seed/an1|--mode interp --anchor-noise 1.0"
+  "C_weak_seed/an2|--mode interp --anchor-noise 2.0"
+  "C_weak_seed/an5|--mode interp --anchor-noise 5.0"
+  "C_weak_seed/ma2_an010|--mode interp --max-anchors 2 --anchor-noise 0.10"
+
+  # (E) Bypass projector: feed z directly into the LLM input-embedding
+  # sequence at the xRAG token position. Probe-derived sigmas:
   #   0.0027 = LLM embed_tokens per-coord std (||z|| ~ 0.17)
   #   1.0    = intermediate (||z|| ~ 64)
   #   200    = projector-image per-coord std (||z|| ~ 12.8k)
   "E_bypass/bypass_s0.0027|--mode bypass_random --sigma 0.0027"
   "E_bypass/bypass_s1.0|--mode bypass_random --sigma 1.0"
   "E_bypass/bypass_s200|--mode bypass_random --sigma 200.0"
-  # (H) standalone (G2-independence): random sampler, seed-ratio=0 so no
-  # G2 outputs are kept; all 15 generations come from latent + realignment.
+
+  # (H) Standalone (G2-independence): random sampler, seed-ratio=0 so
+  # no G2 outputs are kept; all 15 generations come from latent +
+  # realignment.
   "H_standalone/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
 )
 
