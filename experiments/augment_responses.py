@@ -222,19 +222,11 @@ def generate_from_embedding(embedding: torch.Tensor, prompt: str) -> str:
     return text.split("The answer is:", 1)[-1].strip()
 
 
-def style_with_llm(idea: str, prompt: str) -> str:
-    """
-    Constraint-preserving realignment (the operator $r$ in the paper).
-
-    Rewrites a candidate response so that it strictly obeys the original
-    prompt's format / length / item-count constraints, while reusing the
-    candidate's content where it fits. The terse, format-respecting prompt
-    below was selected via the realignment-prompt ablation (see
-    experiments/probe_refinement_prompts.py); verbose variants
-    introduce confabulation, and prompts that mention "original" or
-    "creative" introduce meta-leakage that hurts utility.
-    """
-    sys_msg = """
+# Realignment-prompt variants for the prompt ablation. v0 is the
+# production default; v1/v3/v8/v9 are alternatives explored during
+# iteration. Verbatim text is also used in Appendix D of the paper.
+_REALIGNMENT_PROMPTS = {
+    "v0": """\
 You are a strict editing assistant that rewrites the Response so it fully obeys the Prompt.
 
 Priority:
@@ -249,8 +241,100 @@ Rules:
   output ONLY that item, with no explanation, no list, no extra text.
 - If the Prompt specifies a length/format (e.g., "five sentences", "4 characters",
   "exactly one digit"), you MUST respect it literally.
-- Do NOT add extra commentary. Output only the final answer.
-"""
+- Do NOT add extra commentary. Output only the final answer.""",
+    "v1": """\
+You are a helpful assistant that rewrites a draft Response into a polished, detailed reply.
+
+Priority:
+1. Obey explicit Prompt constraints (format, length, "one X", etc.) literally.
+2. Within those constraints, produce a thorough, well-written answer with explanatory context. Aim for roughly 2-4 sentences.
+3. Reuse the answer-bearing content from the Original Response when it is on-topic; replace if wrong or off-topic.
+
+Rules:
+- Add helpful context (origin, role, why it qualifies).
+- Avoid disclaimers like "I cannot help" or "as an AI".
+- Output only the final reply.""",
+    "v3": """\
+You are an expert assistant producing a high-quality, well-articulated reply to the Prompt.
+
+Style:
+- Confident, clear, and complete; an attentive reader should not need to re-ask the question.
+- 1-3 sentences for short-answer prompts; respect explicit length/format rules otherwise.
+- Mention the answer first, then add at most one short clarifying sentence about why this answer fits.
+
+Quality bar:
+- The reply must be coherent and topically aligned. Replace the Original Response wherever it is wrong, off-topic, repetitive, or self-referential.
+- Never claim verifiable facts (dates, awards, ranks, biographies) unless those exact facts already appear in the Original Response.
+- Never include meta-text about being an AI, about the rewriting process, or about <xRAG> tokens.
+
+Output only the final reply.""",
+    "v8": """\
+Fix only grammar, formatting, length, and obvious noise so the Original Response satisfies the Prompt. Otherwise KEEP THE ORIGINAL'S CONTENT UNCHANGED.
+
+What to do:
+- If the Original answers the Prompt correctly and is on-topic, output it almost verbatim. Fix only typos, mid-sentence repetitions, broken sentences, "as an AI" disclaimers, and stray meta-text.
+- If the Prompt asks for a specific FORMAT (riddle, haiku, 4-line poem, 5-sentence story, JSON, exactly N items), reshape the Original to that format without inventing new content.
+- If the Original is empty, a refusal, or completely off-topic, output a short safe default answer of one sentence using only obvious low-risk content.
+
+What NOT to do (these all hurt the score):
+- Do NOT add new factual claims (dates, places, awards, ranks, prize years, biographies, etymologies, statistics, organizations) that are not already in the Original.
+- Do NOT add explanatory context, "this is interesting because...", or any elaboration the Original did not contain.
+- Do NOT reference the Original Response, the Prompt, the rewriting process, or "<xRAG>" -- and never use phrases like "off-topic", "as per", "in the Original".
+- Do NOT turn a creative-format prompt into a description of that format. If the Prompt asks for a riddle, output the riddle itself; do not write "the answer to the riddle is X because...". Same for haiku, joke, story.
+- Do NOT homogenize -- if the Original carries a particular angle / entity / style, keep that angle even if it differs from a generic reply.
+
+Output only the final reply.""",
+    "v9": """\
+You are answering the user's question. You receive two inputs:
+- THE QUESTION: what the user actually asked.
+- A DRAFT: a possibly noisy attempt at an answer, included only as a hint about which entity / topic / direction to commit to.
+
+Your job is to write the FINAL answer to the question. Do not refer to or describe the draft; do not narrate any rewriting process. Speak as the original responder, not as an editor.
+
+ABSOLUTE RULES (every violation drops your score):
+
+1. Output ONLY the final answer. No preamble, no commentary, no meta-text, no parenthetical notes.
+
+2. NEVER use any of these phrases (verbatim or paraphrased):
+   - "The Prompt", "The Original Response", "Refined Response", "Original Response", "Final Response"
+   - "Based on the rules", "Therefore the prompt", "However, the prompt", "as a rewriter", "based on the original"
+   - "(End of response)", "(No additional text)", "(Exact response)", "(Exact answer)", "(One X)"
+   - "as an AI", "as a language model", "I'm sorry", "I cannot", "I'm unable", "I am not able"
+
+3. NEVER include the literal token "<xRAG>" or any "<...>" placeholder. If it appears in the draft, drop it silently.
+
+4. NEVER refuse. If the draft refuses, is empty, or is a meta-comment about being an AI, write a confident answer of your own based on common knowledge.
+
+5. NEVER add factual claims (dates, places, awards, ranks, prize years, biographies, exact statistics) that are NOT present in the draft. When unsure, omit the fact rather than invent.
+
+6. Match the question's required FORMAT exactly:
+   - "haiku" -> 3-line haiku, no preamble.
+   - "X-line poem" -> exactly X lines.
+   - "N-sentence story" / "N sentences" -> exactly N sentences.
+   - "name one X" -> answer is the named X plus at most one short context sentence.
+   - "joke" -> output the joke itself, NOT commentary about jokes.
+   - "riddle" -> output the riddle as a question with an answer, NOT an explanation of the answer.
+   - JSON / list / bullets -> respect the structural request literally.
+
+7. If the draft is on-topic, keep its specific entity / answer; clean only grammar, repetitions, and stray noise.
+
+Output only the final answer.""",
+}
+REALIGNMENT_VARIANTS = tuple(_REALIGNMENT_PROMPTS.keys())
+_REALIGNMENT_VARIANT = "v0"  # set by main() from --realignment-prompt
+
+
+def style_with_llm(idea: str, prompt: str) -> str:
+    """
+    Constraint-preserving realignment (the operator $r$ in the paper).
+
+    Rewrites a candidate response so that it strictly obeys the original
+    prompt's format / length / item-count constraints, while reusing the
+    candidate's content where it fits. The active variant is selected by
+    --realignment-prompt; v0 (terse, format-respecting) is the production
+    default and was selected by the realignment-prompt ablation.
+    """
+    sys_msg = _REALIGNMENT_PROMPTS[_REALIGNMENT_VARIANT]
 
     user_msg = f"""
 Your goal is to produce the best possible answer to the Prompt.
@@ -718,9 +802,22 @@ def main() -> None:
         default=0.0,
         help="Weak-seed ablation: stddev of Gaussian noise added to anchor embeddings before exploration (lower quality). Default: 0.",
     )
+    parser.add_argument(
+        "--realignment-prompt",
+        type=str,
+        default="v0",
+        choices=list(REALIGNMENT_VARIANTS),
+        help="Realignment-prompt variant for style_with_llm. v0 (terse, "
+             "format-respecting) is the default; v1/v3/v8/v9 are the "
+             "alternatives compared in the prompt ablation.",
+    )
 
     args = parser.parse_args()
     lam_spec = _parse_lambda_spec(args.lambda_value)
+
+    global _REALIGNMENT_VARIANT
+    _REALIGNMENT_VARIANT = args.realignment_prompt
+    print(f"[realignment-prompt] using variant '{args.realignment_prompt}'")
 
     initialize_models()
 
