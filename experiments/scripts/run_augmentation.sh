@@ -25,6 +25,7 @@ GPU="${CUDA_VISIBLE_DEVICES:-0}"
 MODE="interp"
 MAX_ANCHORS=""
 ANCHOR_NOISE=""
+REALIGNMENT_PROMPT=""
 
 # ── parse arguments ─────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --mode)          MODE="$2";          shift 2 ;;   # ablation: interp|single|mean|medoid|gauss
     --max-anchors)   MAX_ANCHORS="$2";   shift 2 ;;   # weak-seed: cap anchor count
     --anchor-noise)  ANCHOR_NOISE="$2";  shift 2 ;;   # weak-seed: noise stddev on anchors
+    --realignment-prompt) REALIGNMENT_PROMPT="$2"; shift 2 ;;  # v0|v1|v3|v8|v9
     *) echo "Unknown flag: $1"; exit 1 ;;
   esac
 done
@@ -68,6 +70,7 @@ echo "  output: $OUTPUT"
 EXTRA_ARGS=()
 [[ -n "$MAX_ANCHORS"  ]] && EXTRA_ARGS+=(--max-anchors "$MAX_ANCHORS")
 [[ -n "$ANCHOR_NOISE" ]] && EXTRA_ARGS+=(--anchor-noise "$ANCHOR_NOISE")
+[[ -n "$REALIGNMENT_PROMPT" ]] && EXTRA_ARGS+=(--realignment-prompt "$REALIGNMENT_PROMPT")
 
 uv run python experiments/augment_responses.py \
     --input "$INPUT" \
