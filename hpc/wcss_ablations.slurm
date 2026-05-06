@@ -197,6 +197,14 @@ CELLS=(
   # no G2 outputs are kept; all 15 generations come from latent +
   # realignment.
   "H_standalone/random_no_g2|--mode random --sigma 4.77 --seed-ratio 0"
+
+  # (F) Realignment-prompt variants. v0 is the production default and
+  # is covered by A_sampling/style_on/interp; v1/v3/v8/v9 swap the
+  # system prompt of style_with_llm via --realignment-prompt.
+  "F_prompts/v1|--mode interp --realignment-prompt v1"
+  "F_prompts/v3|--mode interp --realignment-prompt v3"
+  "F_prompts/v8|--mode interp --realignment-prompt v8"
+  "F_prompts/v9|--mode interp --realignment-prompt v9"
 )
 
 run_cell() {
